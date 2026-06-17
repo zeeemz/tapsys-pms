@@ -1,0 +1,6 @@
+server/node_modules/
+server/.env
+server/*.db
+server/*.db-journal
+server/prisma/schema.prisma
+server/prisma/*.db

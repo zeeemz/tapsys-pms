@@ -563,14 +563,28 @@ const Store = {
     }
     else{this._d=JSON.parse(JSON.stringify(SEED));}
   },
+  initEmpty(){this._d={users:[],vendors:[],requisitions:[],purchaseOrders:[],quotes:[],receipts:[],invoices:[],coi:[],exceptions:[],overrideRequests:[],auditLog:[],budgets:[],deptApprovalConfig:{}};},
+  // Replace the in-memory cache with a fresh server bootstrap (no localStorage write in backend mode).
+  loadBootstrap(bs){
+    const base={users:[],vendors:[],requisitions:[],purchaseOrders:[],quotes:[],receipts:[],invoices:[],coi:[],exceptions:[],overrideRequests:[],auditLog:[],budgets:[],deptApprovalConfig:{}};
+    if(bs.mode==='vendor'){
+      this._d=Object.assign(base,{purchaseOrders:bs.purchaseOrders||[],invoices:bs.invoices||[],vendors:bs.vendor?[bs.vendor]:[]});
+    } else {
+      this._d=Object.assign(base,{
+        users:bs.users||[],vendors:bs.vendors||[],requisitions:bs.requisitions||[],purchaseOrders:bs.purchaseOrders||[],
+        quotes:bs.quotes||[],receipts:bs.receipts||[],invoices:bs.invoices||[],coi:bs.coi||[],exceptions:bs.exceptions||[],
+        overrideRequests:bs.overrideRequests||[],auditLog:bs.auditLog||[],budgets:bs.budgets||[],deptApprovalConfig:bs.deptApprovalConfig||{},
+      });
+    }
+  },
   get(k){return this._d[k]||[];},
   set(k,v){this._d[k]=v;this._save();},
   save(){this._save();},
-  _save(){try{localStorage.setItem('tapsys_pms_v1',JSON.stringify(this._d));}catch(e){}},
-  findUser(id){return this._d.users.find(u=>u.id===id)||null;},
-  findVendor(id){return this._d.vendors.find(v=>v.id===id)||null;},
-  findPR(id){return this._d.requisitions.find(r=>r.id===id)||null;},
-  findPO(id){return this._d.purchaseOrders.find(p=>p.id===id)||null;},
+  _save(){if(typeof API!=='undefined'&&API.on)return;try{localStorage.setItem('tapsys_pms_v1',JSON.stringify(this._d));}catch(e){}},
+  findUser(id){return (this._d.users||[]).find(u=>u.id===id)||null;},
+  findVendor(id){return (this._d.vendors||[]).find(v=>v.id===id)||null;},
+  findPR(id){return (this._d.requisitions||[]).find(r=>r.id===id)||null;},
+  findPO(id){return (this._d.purchaseOrders||[]).find(p=>p.id===id)||null;},
   nextId(prefix){
     const items=this._d[{PR:'requisitions',PO:'purchaseOrders',V:'vendors',Q:'quotes',R:'receipts',I:'invoices',COI:'coi',EXC:'exceptions'}[prefix]]||[];
     return prefix+'-'+(1000+items.length+1);
@@ -637,7 +651,26 @@ const BL = {
 };
 
 // ════════════════════════════════════════════
-// AUTH (demo)  — credentials live client-side for demo only
+// API CLIENT — talks to the Express/Prisma backend when present.
+// Falls back to client-side localStorage demo mode when no backend is reachable.
+// ════════════════════════════════════════════
+const API = {
+  base:(window.__API_BASE__||'')+'/api',
+  token:'',
+  on:false,
+  async detect(){ try{ const r=await fetch(this.base+'/health',{cache:'no-store'}); this.on=r.ok; }catch(e){ this.on=false; } return this.on; },
+  async call(method,path,body){
+    const res=await fetch(this.base+path,{method,headers:Object.assign({'Content-Type':'application/json'},this.token?{Authorization:'Bearer '+this.token}:{}),body:body!==undefined?JSON.stringify(body):undefined});
+    let data={}; try{ data=await res.json(); }catch(e){}
+    if(!res.ok) throw new Error(data.error||('Request failed ('+res.status+')'));
+    return data;
+  },
+};
+// Send a mutation to the backend and refresh the local cache from the returned bootstrap.
+async function apiSend(method,path,body){ const bs=await API.call(method,path,body); Store.loadBootstrap(bs); return bs; }
+
+// ════════════════════════════════════════════
+// AUTH (demo fallback)  — used only when no backend is reachable
 // ════════════════════════════════════════════
 const Auth = {
   PASSWORD:'tapsys',
@@ -660,13 +693,32 @@ const App = {
   params:{},
   currentUser:null,
   currentVendor:null,
-  init(){
-    Store.init();
+  async init(){
     this.currentUser=null;this.currentVendor=null;
+    await API.detect();
+    if(API.on){
+      Store.initEmpty();
+      API.token=localStorage.getItem('tapsys_pms_token')||'';
+      if(API.token){
+        try{
+          const me=await API.call('GET','/auth/me');
+          if(me.type==='vendor'){this.currentVendor=me.vendor;this.currentUser=null;}
+          else{this.currentUser=me.user;this.currentVendor=null;}
+          await this.hydrate();
+          this.showApp();
+          return;
+        }catch(e){ API.token='';localStorage.removeItem('tapsys_pms_token'); }
+      }
+      this.showLogin();
+      return;
+    }
+    // Offline / static demo mode (e.g. GitHub Pages) — localStorage only
+    Store.init();
     const sess=this._loadSession();
     if(sess&&this._applySession(sess)){this.showApp();}
     else{this.showLogin();}
   },
+  async hydrate(){ const bs=await API.call('GET','/bootstrap'); Store.loadBootstrap(bs); },
   isVendor(){return !!this.currentVendor;},
   // ── Authentication ──
   _loadSession(){try{return JSON.parse(localStorage.getItem('tapsys_pms_auth')||'null');}catch(e){return null;}},
@@ -692,10 +744,23 @@ const App = {
     this._renderNav();this._renderSidebarUser();this._renderTopbarUser();
     this.navigate(this.currentVendor?'vendor-dashboard':'dashboard');
   },
-  login(){
+  async login(){
     const email=(document.getElementById('login-email')||{}).value?.trim().toLowerCase()||'';
     const pass=(document.getElementById('login-pass')||{}).value||'';
     if(!email||!pass){this._showLoginError('Enter your email and password.');return;}
+    if(API.on){
+      try{
+        const res=await API.call('POST','/auth/login',{email,password:pass});
+        API.token=res.token;localStorage.setItem('tapsys_pms_token',res.token);
+        if(res.type==='vendor'){this.currentVendor=res.vendor;this.currentUser=null;}
+        else{this.currentUser=res.user;this.currentVendor=null;}
+        await this.hydrate();
+        this._hideLoginError();this.showApp();
+        const who=this.currentVendor?(this.currentVendor.contactPerson||this.currentVendor.name):this.currentUser.name;
+        Toast.success('Welcome, '+who+'.');
+      }catch(e){ this._showLoginError(e.message||'Invalid email or password.'); }
+      return;
+    }
     const sess=Auth.authenticate(email,pass);
     if(!sess){this._showLoginError('Invalid email or password. Try a demo account below.');return;}
     this._applySession(sess);this._saveSession(sess);this._hideLoginError();
@@ -704,14 +769,14 @@ const App = {
     Toast.success('Welcome, '+who+'.');
   },
   demoLogin(email){
-    const u=Store.get('users').find(x=>x.email.toLowerCase()===email);
-    const v=Store.get('vendors').find(x=>x.status==='Active'&&(x.contact||'').toLowerCase()===email);
     const e=document.getElementById('login-email'),p=document.getElementById('login-pass');
-    if(e)e.value=(u?u.email:v?v.contact:email);if(p)p.value=Auth.PASSWORD;
+    if(e)e.value=email;if(p)p.value=(typeof Auth!=='undefined'?Auth.PASSWORD:'tapsys');
     this.login();
   },
   logout(){
-    this._clearSession();
+    if(API.on){API.token='';try{localStorage.removeItem('tapsys_pms_token');}catch(e){}}
+    else{this._clearSession();}
+    this.currentUser=null;this.currentVendor=null;
     Toast.info('Signed out.');
     this.showLogin();
   },
@@ -725,13 +790,23 @@ const App = {
   },
   _renderDemoAccounts(){
     const el=document.getElementById('login-demo-list');if(!el)return;
-    const users=Store.get('users');
-    const vendors=Store.get('vendors').filter(v=>v.status==='Active');
+    // Static list so demo accounts show on the login screen before any data is loaded.
+    const staff=[
+      ['HM','Hamid Malik','Budget Owner','hamid@tapsys.pk'],['FZ','Fatima Zahra','Requestor','fatima@tapsys.pk'],
+      ['AH','Ali Hassan','Procurement Lead','ali@tapsys.pk'],['UR','Usman Raza','Finance / CFO','usman@tapsys.pk'],
+      ['ZA','Zainab Ahmed','CEO / Founder','zainab@tapsys.pk'],['TK','Tariq Khan','IT Lead','tariq@tapsys.pk'],
+      ['AS','Amina Siddiqui','Audit Committee','amina@tapsys.pk'],['BJ','Bilal Javed','Sales Lead','bilal@tapsys.pk'],
+    ];
+    const vendors=[
+      ['T','Kamran Sheikh','TechSolutions Pvt Ltd','info@techsolutions.pk'],
+      ['C','Sana Mirza','CloudServe Pakistan','ops@cloudserve.pk'],
+      ['P','Rashid Mehmood','PrintMasters Office Supplies','orders@printmasters.pk'],
+    ];
     const row=(av,avbg,avc,name,meta,email)=>`<div class="login-demo-row" onclick="App.demoLogin('${email.toLowerCase()}')"><div class="login-demo-av" style="${avbg?`background:${avbg};color:${avc}`:''}">${av}</div><div style="min-width:0"><div class="ld-name">${name}</div><div class="ld-meta">${meta}</div></div><span class="ld-go">Sign in →</span></div>`;
     el.innerHTML=`<div class="login-demo-grp">Internal staff</div>`+
-      users.map(u=>row(u.initials,'','',u.name,u.role+' · '+u.email,u.email)).join('')+
+      staff.map(s=>row(s[0],'','',s[1],s[2]+' · '+s[3],s[3])).join('')+
       `<div class="login-demo-grp">Vendor portal</div>`+
-      vendors.map(v=>row(v.name[0],'var(--warning-bg)','var(--warning-t)',v.contactPerson||v.name,v.name+' · '+v.contact,v.contact)).join('');
+      vendors.map(v=>row(v[0],'var(--warning-bg)','var(--warning-t)',v[1],v[2]+' · '+v[3],v[3])).join('');
   },
   navigate(view,params={}){
     this.view=view;this.params=params;
@@ -2072,9 +2147,10 @@ function approveModal(prId){
     `<button class="btn btn-outline" onclick="Modal.close()">Cancel</button><button class="btn btn-success" onclick="doApprove('${prId}')">${I('check_sm')} Confirm Approval</button>`
   );
 }
-function doApprove(prId){
+async function doApprove(prId){
   const comment=(document.getElementById('appr-comment')||{}).value||'';
   if(!comment.trim()){Toast.danger('Approval comment is required.');return;}
+  if(API.on){try{await apiSend('POST',`/requisitions/${prId}/approve`,{comment});Modal.close();Toast.success('Requisition approved.');App.navigate('pr-detail',{id:prId});}catch(e){Toast.danger(e.message);}return;}
   const prs=Store.get('requisitions');
   const idx=prs.findIndex(p=>p.id===prId);if(idx<0)return;
   const pr=prs[idx];
@@ -2101,9 +2177,10 @@ function rejectModal(prId){
     `<button class="btn btn-outline" onclick="Modal.close()">Cancel</button><button class="btn btn-danger" onclick="doReject('${prId}')">${I('x_sm')} Confirm Rejection</button>`
   );
 }
-function doReject(prId){
+async function doReject(prId){
   const reason=(document.getElementById('rej-reason')||{}).value||'';
   if(!reason.trim()){Toast.danger('Rejection reason is required.');return;}
+  if(API.on){try{await apiSend('POST',`/requisitions/${prId}/reject`,{reason});Modal.close();Toast.danger('Requisition rejected.');App.navigate('approvals');}catch(e){Toast.danger(e.message);}return;}
   const prs=Store.get('requisitions');
   const idx=prs.findIndex(p=>p.id===prId);if(idx<0)return;
   prs[idx].status='Rejected';
@@ -2122,7 +2199,8 @@ function cancelPRModal(prId){
     `<button class="btn btn-outline" onclick="Modal.close()">Keep</button><button class="btn btn-danger" onclick="doCancelPR('${prId}')">Yes, Cancel</button>`
   );
 }
-function doCancelPR(prId){
+async function doCancelPR(prId){
+  if(API.on){try{await apiSend('POST',`/requisitions/${prId}/cancel`,{});Modal.close();Toast.info('Requisition cancelled.');App.navigate('requisitions');}catch(e){Toast.danger(e.message);}return;}
   const prs=Store.get('requisitions');
   const idx=prs.findIndex(p=>p.id===prId);if(idx<0)return;
   prs[idx].status='Cancelled';
@@ -2157,7 +2235,7 @@ function issuePOModal(prId){
     true
   );
 }
-function doIssuePO(prId){
+async function doIssuePO(prId){
   const vendorId=(document.getElementById('po-vendor')||{}).value;
   const amount=parseFloat((document.getElementById('po-amount')||{}).value||0);
   const terms=(document.getElementById('po-terms')||{}).value||'Net 30';
@@ -2165,6 +2243,7 @@ function doIssuePO(prId){
   const notes=(document.getElementById('po-notes')||{}).value||'';
   if(!vendorId){Toast.danger('Select a vendor from the AVL.');return;}
   if(!amount){Toast.danger('PO amount is required.');return;}
+  if(API.on){try{await apiSend('POST','/purchase-orders',{prId,vendorId,amount,terms,deliveryDate:delivery,notes});Modal.close();Toast.success('Purchase order issued.');App.navigate('purchase-orders');}catch(e){Toast.danger(e.message);}return;}
   const pos=Store.get('purchaseOrders');
   const pr=Store.findPR(prId);
   const _poYr=new Date().getFullYear();
@@ -2199,11 +2278,12 @@ function addVendorModal(){
     true
   );
 }
-function doAddVendor(){
+async function doAddVendor(){
   const name=(document.getElementById('nv-name')||{}).value?.trim();
   const cat=(document.getElementById('nv-cat')||{}).value;
   const ntn=(document.getElementById('nv-ntn')||{}).value?.trim();
   if(!name||!cat||!ntn){Toast.danger('Name, category, and NTN are required.');return;}
+  if(API.on){try{await apiSend('POST','/vendors',{name,category:cat,ntn,address:(document.getElementById('nv-addr')||{}).value||'',contact:(document.getElementById('nv-email')||{}).value||'',contactPerson:(document.getElementById('nv-contact')||{}).value||'',riskTier:(document.getElementById('nv-risk')||{}).value||'Medium'});Modal.close();Toast.success('Vendor added to onboarding queue.');App.navigate('vendors');}catch(e){Toast.danger(e.message);}return;}
   const existing=Store.get('vendors').find(v=>v.ntn===ntn);
   if(existing){
     if(existing.status==='Blacklisted'){Toast.danger('⚠ This NTN is on the Blacklist Register. Vendor cannot be added.');return;}
@@ -2223,7 +2303,8 @@ function approveVendorModal(vid){
     `<button class="btn btn-outline" onclick="Modal.close()">Cancel</button><button class="btn btn-success" onclick="doApproveVendor('${vid}')">${I('check_sm')} Approve to AVL</button>`
   );
 }
-function doApproveVendor(vid){
+async function doApproveVendor(vid){
+  if(API.on){try{await apiSend('POST',`/vendors/${vid}/approve`,{});Modal.close();Toast.success('Vendor approved and added to AVL.');App.navigate('vendor-detail',{id:vid});}catch(e){Toast.danger(e.message);}return;}
   const vendors=Store.get('vendors');
   const idx=vendors.findIndex(v=>v.id===vid);if(idx<0)return;
   vendors[idx].status='Active';vendors[idx].avlSince=new Date().toISOString().split('T')[0];vendors[idx].lastReview=new Date().toISOString().split('T')[0];
@@ -2238,9 +2319,10 @@ function suspendVendorModal(vid){
     `<button class="btn btn-outline" onclick="Modal.close()">Cancel</button><button class="btn btn-warning" onclick="doSuspendVendor('${vid}')">Suspend</button>`
   );
 }
-function doSuspendVendor(vid){
+async function doSuspendVendor(vid){
   const reason=(document.getElementById('susp-reason')||{}).value?.trim();
   if(!reason){Toast.danger('Reason is required.');return;}
+  if(API.on){try{await apiSend('POST',`/vendors/${vid}/suspend`,{reason});Modal.close();Toast.warning('Vendor suspended.');App.navigate('vendors');}catch(e){Toast.danger(e.message);}return;}
   const vendors=Store.get('vendors');
   const idx=vendors.findIndex(v=>v.id===vid);if(idx<0)return;
   vendors[idx].status='Suspended';vendors[idx].notes+=' [SUSPENDED: '+reason+']';
@@ -2262,12 +2344,13 @@ function blacklistVendorModal(vid){
     true
   );
 }
-function doBlacklist(vid){
+async function doBlacklist(vid){
   const grounds=(document.getElementById('bl-grounds')||{}).value;
   const detail=(document.getElementById('bl-detail')||{}).value?.trim();
   const duration=(document.getElementById('bl-duration')||{}).value||'Indefinite';
   if(!grounds){Toast.danger('Select blacklisting grounds.');return;}
   if(!detail){Toast.danger('Evidence detail is required.');return;}
+  if(API.on){try{await apiSend('POST',`/vendors/${vid}/blacklist`,{grounds,detail,duration});Modal.close();Toast.danger('Vendor blacklisted and removed from AVL.');App.navigate('vendors');}catch(e){Toast.danger(e.message);}return;}
   const vendors=Store.get('vendors');
   const idx=vendors.findIndex(v=>v.id===vid);if(idx<0)return;
   vendors[idx].status='Blacklisted';vendors[idx].notes=`BLACKLISTED (${duration}). Grounds: ${grounds}. ${detail}`;
@@ -2292,11 +2375,12 @@ function confirmReceiptModal(poId){
     true
   );
 }
-function doConfirmReceipt(poId){
+async function doConfirmReceipt(poId){
   if(!(document.getElementById('rec-sod')||{}).checked){Toast.danger('You must confirm SoD compliance.');return;}
   const recDate=(document.getElementById('rec-date')||{}).value;
   const cond=(document.getElementById('rec-cond')||{}).value||'Good';
   const notes=(document.getElementById('rec-notes')||{}).value||'';
+  if(API.on){try{await apiSend('POST','/receipts',{poId,receivedAt:recDate,condition:cond,notes});Modal.close();Toast.success('Receipt confirmed.');App.navigate('receipts');}catch(e){Toast.danger(e.message);}return;}
   const receipts=Store.get('receipts');
   receipts.push({id:'r'+(receipts.length+1),poId,receivedBy:App.currentUser.id,receivedAt:recDate,qty:'As per PO',condition:cond,notes,signed:true});
   Store.set('receipts',receipts);
@@ -2344,12 +2428,13 @@ function declareCOIModal(){
     true
   );
 }
-function doDeclareCOI(){
+async function doDeclareCOI(){
   const noneChecked=(document.getElementById('coi-none')||{}).checked;
   const party=(document.getElementById('coi-party')||{}).value?.trim()||'None';
   const rel=(document.getElementById('coi-rel')||{}).value?.trim();
   if(!noneChecked&&!rel){Toast.danger('Describe the relationship or check "no conflicts".');return;}
   const refs=((document.getElementById('coi-refs')||{}).value||'').split(',').map(s=>s.trim()).filter(Boolean);
+  if(API.on){try{await apiSend('POST','/coi',{none:noneChecked,party,relationship:rel,procRefs:refs});Modal.close();Toast.success('COI declaration submitted.');App.navigate('compliance');}catch(e){Toast.danger(e.message);}return;}
   const cois=Store.get('coi');
   cois.push({id:'coi'+(cois.length+1),userId:App.currentUser.id,declaredAt:new Date().toISOString().split('T')[0],party:noneChecked?'None':party,relationship:noneChecked?'No conflicts declared':rel,procRefs:refs,status:'Active',recused:false,reviewedBy:null,reviewNote:''});
   Store.set('coi',cois);
@@ -2371,9 +2456,10 @@ function addWaiverModal(){
     true
   );
 }
-function doAddWaiver(){
+async function doAddWaiver(){
   const reason=(document.getElementById('wav-reason')||{}).value?.trim();
   if(!reason){Toast.danger('Justification is required.');return;}
+  if(API.on){try{await apiSend('POST','/exceptions',{type:(document.getElementById('wav-type')||{}).value||'Other',policySection:(document.getElementById('wav-section')||{}).value||'',prRef:(document.getElementById('wav-pr')||{}).value||'',reason});Modal.close();Toast.info('Waiver request submitted for review.');App.navigate('exceptions');}catch(e){Toast.danger(e.message);}return;}
   const excs=Store.get('exceptions');
   const newExc={id:'exc'+(excs.length+1),ref:`WAV-2024-00${excs.length+1}`,type:(document.getElementById('wav-type')||{}).value||'Other',policySection:(document.getElementById('wav-section')||{}).value||'',prRef:(document.getElementById('wav-pr')||{}).value||'',requestedBy:App.currentUser.id,approvedBy:null,requestedAt:new Date().toISOString().split('T')[0],approvedAt:null,status:'Pending',reason,duration:'As specified',compensatingControls:'',notes:''};
   excs.push(newExc);Store.set('exceptions',excs);
@@ -2398,12 +2484,13 @@ function addOverrideModal(){
     true
   );
 }
-function doAddOverride(){
+async function doAddOverride(){
   if(!(document.getElementById('or-nodecl')||{}).checked){Toast.danger('You must complete the integrity declaration.');return;}
   const prRef=(document.getElementById('or-pr')||{}).value?.trim();
   const proposed=(document.getElementById('or-prop')||{}).value?.trim();
   const just=(document.getElementById('or-just')||{}).value?.trim();
   if(!prRef||!proposed||!just){Toast.danger('PR reference, proposed vendor, and justification are required.');return;}
+  if(API.on){try{await apiSend('POST','/overrides',{prRef,proposedVendor:proposed,recommendedVendor:(document.getElementById('or-rec')||{}).value||'Per evaluation',justification:just});Modal.close();Toast.warning('Override request submitted. Audit Committee approval required.');App.navigate('exceptions');}catch(e){Toast.danger(e.message);}return;}
   const overrides=Store.get('overrideRequests');
   const newOR={id:`OR-2024-00${overrides.length+1}`,prRef,requestedBy:App.currentUser.id,requestedAt:new Date().toISOString().split('T')[0],recommendedVendor:(document.getElementById('or-rec')||{}).value||'Per evaluation',proposedVendor:proposed,justification:just,status:'Pending AC Review'};
   overrides.push(newOR);Store.set('overrideRequests',overrides);
@@ -2429,11 +2516,12 @@ function addQuoteModal(prId){
     true
   );
 }
-function doAddQuote(prId){
+async function doAddQuote(prId){
   const vname=(document.getElementById('q-vendor')||{}).value?.trim();
   const amount=parseFloat((document.getElementById('q-amount')||{}).value||0);
   const score=parseInt((document.getElementById('q-score')||{}).value||0);
   if(!vname||!amount){Toast.danger('Vendor name and amount are required.');return;}
+  if(API.on){try{await apiSend('POST','/quotes',{prId,vendorName:vname,amount,score,notes:(document.getElementById('q-notes')||{}).value||'',submittedAt:(document.getElementById('q-date')||{}).value||''});Modal.close();Toast.success('Quote added successfully.');App.navigate('quotes');}catch(e){Toast.danger(e.message);}return;}
   const quotes=Store.get('quotes');
   quotes.push({id:'q'+(quotes.length+1),prId,vendorId:null,vendorName:vname,amount,submittedAt:(document.getElementById('q-date')||{}).value||new Date().toISOString().split('T')[0],score,notes:(document.getElementById('q-notes')||{}).value||''});
   Store.set('quotes',quotes);
@@ -2541,7 +2629,7 @@ function wzBuildReview(){
     ${sole?`<div class="pi-item">${I('warn_sm')} Sole-source — additional approval required</div>`:''}`;
   }
 }
-function submitPR(asDraft){
+async function submitPR(asDraft){
   const title=(document.getElementById('pr-title')||{}).value?.trim();
   const cat=(document.getElementById('pr-cat')||{}).value;
   const sub=(document.getElementById('pr-subtype')||{}).value;
@@ -2552,6 +2640,7 @@ function submitPR(asDraft){
   const reqDate=(document.getElementById('pr-date')||{}).value;
   const multi=(document.getElementById('pr-multiyear')||{}).checked;
   const sole=(document.getElementById('pr-sole')||{}).checked;
+  if(API.on){try{await apiSend('POST','/requisitions',{title,category:cat,subType:sub,amount:amt,multiYear:multi,dept,budgetCode:budget,justification:just,soleSrc:sole,requiredDate:reqDate,asDraft:!!asDraft});Toast.success(asDraft?'Draft saved.':'Requisition submitted for approval.');App.navigate('requisitions');}catch(e){Toast.danger(e.message);}return;}
   const dataHandling=cat==='IT';
   const tier=BL.getDoaTier(amt);
   const src=BL.getSourcingRule(amt);
@@ -2600,7 +2689,7 @@ function recordInvoiceModal(){
     true
   );
 }
-function doRecordInvoice(){
+async function doRecordInvoice(){
   const poId=(document.getElementById('inv-po')||{}).value;
   const ref=(document.getElementById('inv-ref')||{}).value?.trim();
   const amount=parseFloat((document.getElementById('inv-amount')||{}).value||0);
@@ -2610,6 +2699,7 @@ function doRecordInvoice(){
   if(!poId){Toast.danger('Select a purchase order.');return;}
   if(!ref){Toast.danger('Vendor invoice reference is required.');return;}
   if(!amount){Toast.danger('Invoice amount is required.');return;}
+  if(API.on){try{await apiSend('POST','/invoices',{poId,vendorRef:ref,amount,invoiceDate:invDate,dueDate,notes});Modal.close();Toast.success('Invoice recorded and matched.');App.navigate('invoices');}catch(e){Toast.danger(e.message);}return;}
   const po=Store.findPO(poId);
   const receipt=Store.get('receipts').find(r=>r.poId===poId);
   const matched=amount===po.amount;
@@ -2640,8 +2730,9 @@ function releasePaymentModal(invId){
     `<button class="btn btn-outline" onclick="Modal.close()">Cancel</button><button class="btn btn-success" onclick="doReleasePayment('${invId}')">${I('check_sm')} Release Payment</button>`
   );
 }
-function doReleasePayment(invId){
+async function doReleasePayment(invId){
   if(!(document.getElementById('pay-sod')||{}).checked){Toast.danger('You must confirm SoD compliance.');return;}
+  if(API.on){try{await apiSend('POST',`/invoices/${invId}/pay`,{});Modal.close();Toast.success('Payment released.');App.navigate('invoices');}catch(e){Toast.danger(e.message);}return;}
   const invs=Store.get('invoices');
   const idx=invs.findIndex(i=>i.id===invId);if(idx<0)return;
   const inv=invs[idx];
@@ -2674,10 +2765,11 @@ function resolveDiscrepancyModal(invId){
     true
   );
 }
-function doResolveDiscrepancy(invId){
+async function doResolveDiscrepancy(invId){
   const action=(document.getElementById('res-action')||{}).value;
   const note=(document.getElementById('res-note')||{}).value?.trim();
   if(!note){Toast.danger('A resolution note is required.');return;}
+  if(API.on){try{await apiSend('POST',`/invoices/${invId}/resolve`,{action,note});Modal.close();Toast.success('Resolution applied.');App.navigate('invoices');}catch(e){Toast.danger(e.message);}return;}
   const invs=Store.get('invoices');
   const idx=invs.findIndex(i=>i.id===invId);if(idx<0)return;
   const inv=invs[idx];const po=Store.findPO(inv.poId);
@@ -2697,7 +2789,7 @@ function doResolveDiscrepancy(invId){
 }
 
 // ── Vendor Portal: submit invoice ────────────
-function doVendorSubmitInvoice(){
+async function doVendorSubmitInvoice(){
   const v=App.currentVendor;if(!v){Toast.danger('No vendor session.');return;}
   const poId=(document.getElementById('vinv-po')||{}).value;
   const ref=(document.getElementById('vinv-ref')||{}).value?.trim();
@@ -2709,6 +2801,7 @@ function doVendorSubmitInvoice(){
   if(!ref){Toast.danger('Your invoice number is required.');return;}
   if(!amount){Toast.danger('Invoice amount is required.');return;}
   if(!(document.getElementById('vinv-attest')||{}).checked){Toast.danger('Please confirm the supplier attestation.');return;}
+  if(API.on){try{await apiSend('POST','/vendor/invoices',{poId,vendorRef:ref,amount,invoiceDate:invDate,dueDate,notes});Toast.success(`Invoice ${ref} submitted to Tapsys.`);App.navigate('vendor-invoices');}catch(e){Toast.danger(e.message);}return;}
   const po=Store.findPO(poId);
   if(!po||po.vendorId!==v.id){Toast.danger('Invalid purchase order.');return;}
   // Guard against duplicate invoice on the same PO
@@ -2798,10 +2891,11 @@ function _tagFilter(tier,val){
   dd.classList.remove('hidden');
 }
 function _hideTagDd(tier){const dd=document.getElementById(`da-t${tier}-dd`);if(dd)dd.classList.add('hidden');}
-function saveDeptApproval(dept){
-  const cfgs=Store._d.deptApprovalConfig||{};
+async function saveDeptApproval(dept){
   const deptCfg={};
   DOA.forEach(t=>{if((_deptTagSel[t.tier]||[]).length)deptCfg[t.tier]=_deptTagSel[t.tier];});
+  if(API.on){try{await apiSend('PUT','/config/dept-approval',{dept,config:deptCfg});Modal.close();Toast.success(`Approval chain updated for ${dept}.`);App.navigate('settings');}catch(e){Toast.danger(e.message);}return;}
+  const cfgs=Store._d.deptApprovalConfig||{};
   cfgs[dept]=deptCfg;
   Store.set('deptApprovalConfig',cfgs);
   Store.addAudit(App.currentUser.id,'SETTINGS_UPDATED',dept,`Approval chain configured for ${dept} department.`);

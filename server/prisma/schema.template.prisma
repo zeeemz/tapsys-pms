@@ -1,0 +1,202 @@
+// NOTE: This is the source template. `scripts/prepare-schema.js` generates
+// prisma/schema.prisma from it, substituting __PROVIDER__ based on DATABASE_URL.
+// JSON-shaped fields are stored as String (TEXT) for SQLite/Postgres portability.
+
+datasource db {
+  provider = "__PROVIDER__"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id           String  @id
+  name         String
+  email        String  @unique
+  role         String
+  dept         String
+  initials     String
+  passwordHash String
+}
+
+model Vendor {
+  id            String  @id @default(cuid())
+  name          String
+  category      String
+  ntn           String
+  bank          String  @default("")
+  address       String  @default("")
+  contact       String  @default("")
+  contactPerson String  @default("")
+  status        String  @default("Onboarding")
+  riskTier      String  @default("Medium")
+  dd            String  @default("{}")
+  avlSince      String?
+  lastReview    String?
+  preferred     Boolean @default(false)
+  notes         String  @default("")
+}
+
+model Requisition {
+  id            String     @id @default(cuid())
+  ref           String     @unique
+  procurementId String     @default("")
+  title         String
+  category      String
+  subType       String     @default("")
+  amount        Float
+  multiYear     Boolean    @default(false)
+  recurring     Boolean    @default(false)
+  dept          String
+  requestor     String
+  budgetOwner   String
+  budgetCode    String     @default("")
+  justification String     @default("")
+  soleSrc       Boolean    @default(false)
+  dataHandling  Boolean    @default(false)
+  itSecReview   Boolean    @default(false)
+  status        String     @default("Pending Approval")
+  doaTier       Int
+  sourcingReq   Int        @default(1)
+  createdAt     String
+  requiredDate  String     @default("")
+  coiDeclared   Boolean    @default(false)
+  contractReview Boolean   @default(false)
+  notes         String     @default("")
+  approvals     Approval[]
+}
+
+model Approval {
+  id      String      @id @default(cuid())
+  prId    String
+  pr      Requisition @relation(fields: [prId], references: [id], onDelete: Cascade)
+  role    String
+  userId  String
+  action  String
+  date    String
+  comment String      @default("")
+}
+
+model PurchaseOrder {
+  id            String  @id @default(cuid())
+  ref           String  @unique
+  prId          String
+  procurementId String  @default("")
+  vendorId      String
+  description   String  @default("")
+  amount        Float
+  issuedBy      String?
+  issuedAt      String?
+  deliveryDate  String?
+  status        String  @default("Open")
+  terms         String  @default("")
+  notes         String  @default("")
+}
+
+model Quote {
+  id          String  @id @default(cuid())
+  prId        String
+  vendorId    String?
+  vendorName  String
+  amount      Float
+  submittedAt String
+  score       Int     @default(0)
+  notes       String  @default("")
+}
+
+model Receipt {
+  id         String  @id @default(cuid())
+  poId       String
+  receivedBy String
+  receivedAt String
+  qty        String  @default("")
+  condition  String  @default("")
+  notes      String  @default("")
+  signed     Boolean @default(true)
+}
+
+model Invoice {
+  id            String  @id @default(cuid())
+  poId          String
+  receiptId     String?
+  vendorRef     String
+  vendorId      String
+  amount        Float
+  invoiceDate   String
+  dueDate       String  @default("")
+  status        String  @default("Pending Receipt")
+  matchStatus   String  @default("Pending Receipt")
+  discrepancy   String?
+  paidAt        String?
+  notes         String  @default("")
+  procurementId String  @default("")
+  submittedBy   String?
+}
+
+model Coi {
+  id           String  @id @default(cuid())
+  userId       String
+  declaredAt   String
+  party        String  @default("None")
+  relationship String  @default("")
+  procRefs     String  @default("[]")
+  status       String  @default("Active")
+  recused      Boolean @default(false)
+  reviewedBy   String?
+  reviewNote   String  @default("")
+}
+
+model Exception {
+  id                  String  @id @default(cuid())
+  ref                 String
+  type                String
+  policySection       String  @default("")
+  prRef               String  @default("")
+  requestedBy         String
+  approvedBy          String?
+  requestedAt         String
+  approvedAt          String?
+  status              String  @default("Pending")
+  reason              String
+  duration            String  @default("")
+  compensatingControls String @default("")
+  notes               String  @default("")
+}
+
+model OverrideRequest {
+  id                String @id @default(cuid())
+  prRef             String
+  requestedBy       String
+  requestedAt       String
+  recommendedVendor String @default("")
+  proposedVendor    String
+  justification     String @default("")
+  status            String @default("Pending AC Review")
+}
+
+model AuditLog {
+  id      String @id @default(cuid())
+  ts      String
+  userId  String?
+  action  String
+  entity  String
+  detail  String @default("")
+  procId  String @default("")
+}
+
+model Budget {
+  id        String @id @default(cuid())
+  dept      String
+  code      String
+  total     Float
+  spent     Float  @default(0)
+  committed Float  @default(0)
+}
+
+model Config {
+  id                  String @id @default("singleton")
+  deptApprovalConfig  String @default("{}")
+  procIdSeq           Int    @default(0)
+}

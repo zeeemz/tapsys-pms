@@ -323,10 +323,72 @@ label .required{color:var(--danger);margin-left:2px}
 .tag-dropdown-item:hover{background:var(--bg);}
 .tag-dropdown-item .tdi-role{font-weight:600;color:var(--text);}
 .tag-dropdown-item .tdi-users{font-size:11px;color:var(--muted);}
+.hidden{display:none!important}
+/* ── Login screen ── */
+#login-screen{position:fixed;inset:0;z-index:5000;display:flex;background:var(--bg)}
+.login-left{flex:1;background:linear-gradient(155deg,#0c1b33 0%,#13294d 55%,#1b3a6b 100%);color:#fff;padding:56px 48px;display:flex;flex-direction:column;justify-content:space-between;min-width:0}
+.login-brand{display:flex;align-items:center;gap:12px}
+.login-brand .sb-logo{width:42px;height:42px;font-size:20px}
+.login-hl{font-size:34px;font-weight:800;line-height:1.15;margin:0 0 14px;letter-spacing:-.5px}
+.login-sub{font-size:15px;line-height:1.6;color:rgba(255,255,255,.7);max-width:440px;margin:0 0 26px}
+.login-points{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:12px}
+.login-points li{display:flex;align-items:center;gap:10px;font-size:14px;color:rgba(255,255,255,.85)}
+.login-points .lp-dot{width:22px;height:22px;border-radius:50%;background:rgba(255,255,255,.12);display:flex;align-items:center;justify-content:center;flex-shrink:0;color:#7dd3fc}
+.login-foot{font-size:12px;color:rgba(255,255,255,.45)}
+.login-right{width:520px;max-width:100%;background:var(--surface);display:flex;align-items:center;justify-content:center;padding:40px 32px;overflow-y:auto}
+.login-card{width:100%;max-width:380px}
+.login-card h2{font-size:24px;font-weight:700;margin:0 0 6px;color:var(--text)}
+.login-card-sub{font-size:14px;color:var(--muted);margin:0 0 22px}
+.login-error{background:var(--danger-bg);color:var(--danger-t);border:1px solid #fca5a5;border-radius:var(--r-sm);padding:9px 12px;font-size:13px;margin-bottom:14px}
+.login-demo{margin-top:26px;border-top:1px solid var(--border);padding-top:18px}
+.login-demo-head{display:flex;align-items:center;justify-content:space-between;font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:10px}
+.login-demo-head code{background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:1px 6px;font-size:12px;color:var(--primary);text-transform:none;letter-spacing:0}
+.login-demo-grp{font-size:11px;font-weight:700;color:var(--muted);margin:12px 0 6px;text-transform:uppercase;letter-spacing:.4px}
+.login-demo-row{display:flex;align-items:center;gap:10px;padding:7px 9px;border:1px solid var(--border);border-radius:var(--r-sm);cursor:pointer;margin-bottom:6px;transition:var(--tr);background:var(--card)}
+.login-demo-row:hover{border-color:var(--primary);background:var(--primary-bg)}
+.login-demo-av{width:30px;height:30px;border-radius:50%;background:var(--primary-l,var(--primary-bg));color:var(--primary);font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.login-demo-row .ld-name{font-size:13px;font-weight:600;color:var(--text);line-height:1.2}
+.login-demo-row .ld-meta{font-size:11px;color:var(--muted)}
+.login-demo-row .ld-go{margin-left:auto;font-size:11px;color:var(--primary);font-weight:600;opacity:0;transition:var(--tr)}
+.login-demo-row:hover .ld-go{opacity:1}
+.topbar-user{display:flex;align-items:center;gap:8px;padding:4px 10px 4px 4px;border-radius:30px;background:var(--bg);border:1px solid var(--border)}
+.topbar-user .tu-name{font-size:13px;font-weight:600;color:var(--text);line-height:1.1}
+.topbar-user .tu-role{font-size:11px;color:var(--muted)}
+@media(max-width:760px){.login-left{display:none}.login-right{width:100%}}
 </style>
 </head>
 <body>
-<div id="app">
+<div id="login-screen" class="hidden">
+  <div class="login-left">
+    <div class="login-brand"><div class="sb-logo">T</div><div><div style="font-weight:700;font-size:18px">Tapsys PMS</div><div style="opacity:.6;font-size:12px">Procurement Management</div></div></div>
+    <div>
+      <h1 class="login-hl">Procurement,<br>under control.</h1>
+      <p class="login-sub">Requisitions, delegated approvals, competitive sourcing, three-way invoice matching, a supplier portal, and a complete audit trail — aligned to the Tapsys Procurement Policy.</p>
+      <ul class="login-points">
+        <li><span class="lp-dot">✓</span> Role-based approvals with department-level routing</li>
+        <li><span class="lp-dot">✓</span> Unique procurement ID tracked end-to-end</li>
+        <li><span class="lp-dot">✓</span> Vendor portal for invoice submission</li>
+        <li><span class="lp-dot">✓</span> Segregation of duties &amp; tamper-evident audit log</li>
+      </ul>
+    </div>
+    <div class="login-foot">© 2026 Tapsys · Demo environment · Sample data resets per browser</div>
+  </div>
+  <div class="login-right">
+    <div class="login-card">
+      <h2>Sign in</h2>
+      <p class="login-card-sub">Sign in to the procurement system, or pick a demo account below.</p>
+      <div id="login-error" class="login-error hidden"></div>
+      <div class="form-group"><label>Email</label><input id="login-email" class="form-input" type="email" placeholder="you@tapsys.pk" autocomplete="username" onkeydown="if(event.key==='Enter')App.login()"></div>
+      <div class="form-group"><label>Password</label><input id="login-pass" class="form-input" type="password" placeholder="••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')App.login()"></div>
+      <button class="btn btn-primary" style="width:100%;justify-content:center" onclick="App.login()">Sign in</button>
+      <div class="login-demo">
+        <div class="login-demo-head"><span>Demo accounts</span><span>password: <code>tapsys</code></span></div>
+        <div id="login-demo-list"></div>
+      </div>
+    </div>
+  </div>
+</div>
+<div id="app" class="hidden">
   <aside id="sidebar">
     <div class="sb-brand">
       <div class="sb-brand-inner">
@@ -347,10 +409,8 @@ label .required{color:var(--danger);margin-left:2px}
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
           <span class="notif-dot hidden" id="notif-dot"></span>
         </button>
-        <div style="display:flex;align-items:center;gap:6px">
-          <span style="font-size:12px;color:var(--muted);white-space:nowrap">Acting as:</span>
-          <select id="role-switcher" onchange="App.switchUser(this.value)"></select>
-        </div>
+        <div class="topbar-user" id="topbar-user"></div>
+        <button class="btn btn-outline btn-sm" onclick="App.logout()" title="Sign out">Sign out</button>
       </div>
     </header>
     <div id="content"></div>
@@ -577,6 +637,22 @@ const BL = {
 };
 
 // ════════════════════════════════════════════
+// AUTH (demo)  — credentials live client-side for demo only
+// ════════════════════════════════════════════
+const Auth = {
+  PASSWORD:'tapsys',
+  authenticate(email,password){
+    const e=(email||'').trim().toLowerCase();
+    if(password!==this.PASSWORD)return null;
+    const u=Store.get('users').find(x=>(x.email||'').toLowerCase()===e);
+    if(u)return{type:'user',id:u.id};
+    const v=Store.get('vendors').find(x=>x.status==='Active'&&(x.contact||'').toLowerCase()===e);
+    if(v)return{type:'vendor',id:v.id};
+    return null;
+  },
+};
+
+// ════════════════════════════════════════════
 // APP STATE & NAVIGATION
 // ════════════════════════════════════════════
 const App = {
@@ -586,14 +662,77 @@ const App = {
   currentVendor:null,
   init(){
     Store.init();
-    this.currentUser=Store.get('users')[0];
-    this.currentVendor=null;
-    this._renderNav();
-    this._renderUserSelector();
-    this._renderSidebarUser();
-    this.navigate('dashboard');
+    this.currentUser=null;this.currentVendor=null;
+    const sess=this._loadSession();
+    if(sess&&this._applySession(sess)){this.showApp();}
+    else{this.showLogin();}
   },
   isVendor(){return !!this.currentVendor;},
+  // ── Authentication ──
+  _loadSession(){try{return JSON.parse(localStorage.getItem('tapsys_pms_auth')||'null');}catch(e){return null;}},
+  _saveSession(s){try{localStorage.setItem('tapsys_pms_auth',JSON.stringify(s));}catch(e){}},
+  _clearSession(){try{localStorage.removeItem('tapsys_pms_auth');}catch(e){}},
+  _applySession(sess){
+    if(!sess)return false;
+    if(sess.type==='vendor'){const v=Store.findVendor(sess.id);if(v&&v.status==='Active'){this.currentVendor=v;this.currentUser=null;return true;}return false;}
+    const u=Store.findUser(sess.id);if(u){this.currentUser=u;this.currentVendor=null;return true;}
+    return false;
+  },
+  showLogin(){
+    this.currentUser=null;this.currentVendor=null;
+    const app=document.getElementById('app');if(app)app.classList.add('hidden');
+    const ls=document.getElementById('login-screen');if(ls)ls.classList.remove('hidden');
+    const e=document.getElementById('login-email'),p=document.getElementById('login-pass');if(e)e.value='';if(p)p.value='';
+    this._hideLoginError();
+    this._renderDemoAccounts();
+  },
+  showApp(){
+    const ls=document.getElementById('login-screen');if(ls)ls.classList.add('hidden');
+    const app=document.getElementById('app');if(app)app.classList.remove('hidden');
+    this._renderNav();this._renderSidebarUser();this._renderTopbarUser();
+    this.navigate(this.currentVendor?'vendor-dashboard':'dashboard');
+  },
+  login(){
+    const email=(document.getElementById('login-email')||{}).value?.trim().toLowerCase()||'';
+    const pass=(document.getElementById('login-pass')||{}).value||'';
+    if(!email||!pass){this._showLoginError('Enter your email and password.');return;}
+    const sess=Auth.authenticate(email,pass);
+    if(!sess){this._showLoginError('Invalid email or password. Try a demo account below.');return;}
+    this._applySession(sess);this._saveSession(sess);this._hideLoginError();
+    this.showApp();
+    const who=this.currentVendor?(this.currentVendor.contactPerson||this.currentVendor.name):this.currentUser.name;
+    Toast.success('Welcome, '+who+'.');
+  },
+  demoLogin(email){
+    const u=Store.get('users').find(x=>x.email.toLowerCase()===email);
+    const v=Store.get('vendors').find(x=>x.status==='Active'&&(x.contact||'').toLowerCase()===email);
+    const e=document.getElementById('login-email'),p=document.getElementById('login-pass');
+    if(e)e.value=(u?u.email:v?v.contact:email);if(p)p.value=Auth.PASSWORD;
+    this.login();
+  },
+  logout(){
+    this._clearSession();
+    Toast.info('Signed out.');
+    this.showLogin();
+  },
+  _showLoginError(msg){const el=document.getElementById('login-error');if(el){el.textContent=msg;el.classList.remove('hidden');}},
+  _hideLoginError(){const el=document.getElementById('login-error');if(el)el.classList.add('hidden');},
+  _renderTopbarUser(){
+    const el=document.getElementById('topbar-user');if(!el)return;
+    if(this.currentVendor){const v=this.currentVendor;el.innerHTML=`<div class="login-demo-av" style="width:28px;height:28px;background:var(--warning-bg);color:var(--warning-t)">${v.name[0]}</div><div style="min-width:0"><div class="tu-name">${v.contactPerson||v.name}</div><div class="tu-role">${v.name} · Vendor</div></div>`;return;}
+    const u=this.currentUser;if(!u)return;
+    el.innerHTML=`<div class="login-demo-av" style="width:28px;height:28px">${u.initials}</div><div style="min-width:0"><div class="tu-name">${u.name}</div><div class="tu-role">${u.role}</div></div>`;
+  },
+  _renderDemoAccounts(){
+    const el=document.getElementById('login-demo-list');if(!el)return;
+    const users=Store.get('users');
+    const vendors=Store.get('vendors').filter(v=>v.status==='Active');
+    const row=(av,avbg,avc,name,meta,email)=>`<div class="login-demo-row" onclick="App.demoLogin('${email.toLowerCase()}')"><div class="login-demo-av" style="${avbg?`background:${avbg};color:${avc}`:''}">${av}</div><div style="min-width:0"><div class="ld-name">${name}</div><div class="ld-meta">${meta}</div></div><span class="ld-go">Sign in →</span></div>`;
+    el.innerHTML=`<div class="login-demo-grp">Internal staff</div>`+
+      users.map(u=>row(u.initials,'','',u.name,u.role+' · '+u.email,u.email)).join('')+
+      `<div class="login-demo-grp">Vendor portal</div>`+
+      vendors.map(v=>row(v.name[0],'var(--warning-bg)','var(--warning-t)',v.contactPerson||v.name,v.name+' · '+v.contact,v.contact)).join('');
+  },
   navigate(view,params={}){
     this.view=view;this.params=params;
     this._renderNav();
@@ -609,16 +748,14 @@ const App = {
       const v=Store.findVendor(value.slice(7));
       if(v){this.currentVendor=v;this.currentUser=null;
         this.view='vendor-dashboard';
-        this._renderSidebarUser();this._renderNav();this._renderBreadcrumb();this._renderContent();
-        const sel=document.getElementById('role-switcher');if(sel&&sel.value!==value)sel.value=value;
+        this._renderSidebarUser();this._renderTopbarUser();this._renderNav();this._renderBreadcrumb();this._renderContent();
         this._updateNotif();}
       return;
     }
     const u=Store.findUser(value);
     if(u){this.currentUser=u;this.currentVendor=null;
       if(this.view.startsWith('vendor-'))this.view='dashboard';
-      this._renderSidebarUser();this._renderNav();this._renderBreadcrumb();this._renderContent();
-      const sel=document.getElementById('role-switcher');if(sel&&sel.value!==u.id)sel.value=u.id;
+      this._renderSidebarUser();this._renderTopbarUser();this._renderNav();this._renderBreadcrumb();this._renderContent();
       this._updateNotif();}
   },
   _updateNotif(){

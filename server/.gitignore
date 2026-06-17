@@ -4,3 +4,5 @@ node_modules/
 *.db-journal
 prisma/schema.prisma
 prisma/dev.db
+public/
+deploy.zip

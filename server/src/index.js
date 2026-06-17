@@ -13,8 +13,15 @@ app.use(express.json({ limit: '1mb' }));
 // API
 app.use('/api', router);
 
-// Front-end (single self-contained index.html at the repo root).
-const FRONTEND = path.join(__dirname, '..', '..', 'index.html');
+// Front-end (single self-contained index.html). Resolve from whichever layout is deployed:
+// local repo (../../index.html), or a bundled copy under server/public (Azure/zip deploys).
+const fs = require('fs');
+const FRONTEND_CANDIDATES = [
+  path.join(__dirname, '..', '..', 'index.html'),
+  path.join(__dirname, '..', 'public', 'index.html'),
+  path.join(__dirname, '..', 'index.html'),
+];
+const FRONTEND = FRONTEND_CANDIDATES.find(p => { try { return fs.existsSync(p); } catch (_) { return false; } }) || FRONTEND_CANDIDATES[0];
 app.get('/', (req, res) => res.sendFile(FRONTEND));
 // SPA-style fallback for any non-API GET that isn't a file request.
 app.get(/^\/(?!api\/).*/, (req, res) => res.sendFile(FRONTEND));

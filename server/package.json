@@ -9,7 +9,7 @@
     "db:push": "npm run prepare:db && prisma generate && prisma db push --skip-generate --accept-data-loss",
     "predev": "npm run db:push",
     "dev": "node src/index.js",
-    "prestart": "npm run db:push",
+    "prestart": "npm run prepare:db && prisma db push --skip-generate --accept-data-loss",
     "start": "node src/index.js",
     "seed": "node prisma/seed.js",
     "postinstall": "npm run prepare:db && prisma generate"
@@ -20,9 +20,7 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
-    "jsonwebtoken": "^9.0.2"
-  },
-  "devDependencies": {
+    "jsonwebtoken": "^9.0.2",
     "prisma": "^5.22.0"
   }
 }

@@ -1,6 +1,7 @@
 const express = require('express');
 const { prisma } = require('./db');
-const { signToken, verifyPassword, authenticate, requireRole, requireStaff, requireVendor } = require('./auth');
+const { signToken, verifyPassword, authenticate, requireRole, requireStaff, requireVendor, isPending } = require('./auth');
+const { AAD, putState, takeState } = require('./aad');
 const policy = require('./policy');
 const tenders = require('./tenders');
 const { addAudit, getConfig, nextProcId, publicUser, outVendor, outCoi, notify, notifyMany } = require('./util');
@@ -44,6 +45,10 @@ async function sweepTenderNotifications() {
 // Bootstrap payload (role-scoped)
 // ─────────────────────────────────────────────────────────────
 async function buildBootstrap(principal) {
+  // Pending (SSO-provisioned, no role) users get a minimal payload — they have no access yet.
+  if (principal.type === 'user' && isPending(principal.role)) {
+    return { mode: 'pending', user: { name: principal.name, email: principal.email, role: principal.role || 'Pending' } };
+  }
   const now = Date.now();
   await sweepTenderNotifications();
   const rid = principal.type === 'vendor' ? 'vendor:' + principal.id : principal.id;
@@ -101,7 +106,42 @@ async function buildBootstrap(principal) {
 // ─────────────────────────────────────────────────────────────
 // Public: health + auth
 // ─────────────────────────────────────────────────────────────
-router.get('/health', (req, res) => res.json({ ok: true, service: 'tapsys-pms', time: new Date().toISOString() }));
+router.get('/health', (req, res) => res.json({ ok: true, service: 'tapsys-pms', time: new Date().toISOString(), aadEnabled: AAD.enabled(), aadDomain: AAD.allowedDomain }));
+
+// ── Entra ID (Azure AD) SSO ──
+router.get('/auth/aad/login', (req, res) => {
+  if (!AAD.enabled()) return res.status(503).send('Microsoft sign-in is not configured.');
+  const state = AAD.randomState(); putState(state);
+  res.redirect(AAD.authorizeUrl(state, AAD.redirectUri(req)));
+});
+
+router.get('/auth/aad/callback', wrap(async (req, res) => {
+  const fail = (msg) => res.redirect('/#sso_error=' + encodeURIComponent(msg));
+  if (!AAD.enabled()) return fail('Microsoft sign-in is not configured.');
+  if (req.query.error) return fail(req.query.error_description || req.query.error);
+  if (!req.query.code || !takeState(String(req.query.state || ''))) return fail('Sign-in session expired. Please try again.');
+  try {
+    const tok = await AAD.exchangeCode(String(req.query.code), AAD.redirectUri(req));
+    const claims = AAD.decodeIdToken(tok.id_token);
+    AAD.validateClaims(claims);
+    const email = AAD.emailFromClaims(claims);
+    if (!email) return fail('No email in your Microsoft profile.');
+    if (!email.endsWith('@' + AAD.allowedDomain)) return fail(`Only @${AAD.allowedDomain} accounts may sign in here.`);
+    let user = await prisma.user.findUnique({ where: { email } });
+    if (!user) {
+      // First-time SSO sign-in: provision with NO role (Pending) — no access until an admin assigns one.
+      const name = claims.name || email.split('@')[0];
+      const initials = (name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) || 'U').toUpperCase();
+      user = await prisma.user.create({ data: { id: 'aad_' + (claims.oid || email).slice(0, 20), name, email, role: 'Pending', dept: 'Unassigned', initials, passwordHash: 'sso' } });
+      await addAudit(user.id, 'SSO_PROVISIONED', email, `New Microsoft SSO user provisioned (awaiting role assignment): ${name} <${email}>.`);
+    }
+    const token = signToken({ sub: user.id, type: 'user', role: user.role });
+    await addAudit(user.id, 'SSO_LOGIN', email, `Signed in via Microsoft Entra ID.`);
+    res.redirect('/#sso_token=' + token);
+  } catch (e) {
+    console.error('[aad]', e); return fail(e.message || 'Microsoft sign-in failed.');
+  }
+}));
 
 router.post('/auth/login', wrap(async (req, res) => {
   const email = String(req.body.email || '').trim().toLowerCase();
@@ -578,6 +618,19 @@ router.post('/tenders/:id/award', authenticate, requireRole('Procurement Lead'),
   const vname = (await prisma.vendor.findUnique({ where: { id: winner.vendorId } }))?.name || 'vendor';
   await addAudit(req.user.id, 'TENDER_AWARDED', t.ref, `Tender ${t.ref} awarded to ${vname} at PKR ${winner.amount.toLocaleString()} (lowest bid).`, t.procurementId);
   await notify('vendor:' + winner.vendorId, `Tender awarded to you — ${t.ref}`, `"${t.title}" has been formally awarded to you at ${pkrFmt(winner.amount)}. Tapsys procurement will issue the purchase order shortly.`, 'tender', t.ref);
+  res.json(await buildBootstrap(req.user));
+}));
+
+// Admin: assign a role to a user (e.g. approve a pending SSO sign-up). CEO / Founder only.
+const ASSIGNABLE_ROLES = ['Requestor', 'Budget Owner', 'Procurement Lead', 'Finance / CFO', 'CEO / Founder', 'Audit Committee', 'IT Lead', 'Sales Lead', 'Pending'];
+router.post('/users/:id/role', authenticate, requireRole('CEO / Founder'), wrap(async (req, res) => {
+  const role = String(req.body.role || '');
+  const dept = req.body.dept != null ? String(req.body.dept) : null;
+  if (!ASSIGNABLE_ROLES.includes(role)) return res.status(400).json({ error: 'Invalid role' });
+  const u = await prisma.user.findUnique({ where: { id: req.params.id } });
+  if (!u) return res.status(404).json({ error: 'User not found' });
+  await prisma.user.update({ where: { id: u.id }, data: { role, ...(dept ? { dept } : {}) } });
+  await addAudit(req.user.id, 'ROLE_ASSIGNED', u.email, `Role for ${u.name} <${u.email}> set to "${role}"${dept ? ` (dept ${dept})` : ''} by ${req.user.name}.`);
   res.json(await buildBootstrap(req.user));
 }));
 

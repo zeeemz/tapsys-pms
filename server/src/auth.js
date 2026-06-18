@@ -19,7 +19,7 @@ async function authenticate(req, res, next) {
   if (payload.type === 'user') {
     const u = await prisma.user.findUnique({ where: { id: payload.sub } });
     if (!u) return res.status(401).json({ error: 'Account not found' });
-    req.user = { id: u.id, name: u.name, email: u.email, role: u.role, dept: u.dept, type: 'user' };
+    req.user = { id: u.id, name: u.name, email: u.email, role: u.role, dept: u.dept, type: 'user', pending: isPending(u.role) };
   } else if (payload.type === 'vendor') {
     const v = await prisma.vendor.findUnique({ where: { id: payload.sub } });
     if (!v || v.status !== 'Active') return res.status(401).json({ error: 'Vendor access revoked' });
@@ -31,10 +31,14 @@ async function authenticate(req, res, next) {
   next();
 }
 
+// A user awaiting role assignment (SSO-provisioned) has no access until an admin assigns a role.
+function isPending(role) { return !role || role === 'Pending' || role === 'No Access'; }
+
 // Role gate for internal staff. Pass a list of allowed roles.
 function requireRole(...roles) {
   return (req, res, next) => {
     if (!req.user || req.user.type !== 'user') return res.status(403).json({ error: 'Staff access required' });
+    if (req.user.pending) return res.status(403).json({ error: 'Your access is pending role assignment by an administrator.' });
     if (roles.length && !roles.includes(req.user.role)) {
       return res.status(403).json({ error: `Requires role: ${roles.join(' or ')}. You are ${req.user.role}.` });
     }
@@ -44,6 +48,7 @@ function requireRole(...roles) {
 
 function requireStaff(req, res, next) {
   if (!req.user || req.user.type !== 'user') return res.status(403).json({ error: 'Staff access required' });
+  if (req.user.pending) return res.status(403).json({ error: 'Your access is pending role assignment by an administrator.' });
   next();
 }
 
@@ -52,4 +57,4 @@ function requireVendor(req, res, next) {
   next();
 }
 
-module.exports = { signToken, hashPassword, verifyPassword, authenticate, requireRole, requireStaff, requireVendor };
+module.exports = { signToken, hashPassword, verifyPassword, authenticate, requireRole, requireStaff, requireVendor, isPending };

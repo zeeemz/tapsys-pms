@@ -3,7 +3,8 @@ const { prisma } = require('./db');
 const { signToken, verifyPassword, authenticate, requireRole, requireStaff, requireVendor } = require('./auth');
 const policy = require('./policy');
 const tenders = require('./tenders');
-const { addAudit, getConfig, nextProcId, publicUser, outVendor, outCoi } = require('./util');
+const { addAudit, getConfig, nextProcId, publicUser, outVendor, outCoi, notify, notifyMany } = require('./util');
+const pkrFmt = (n) => 'PKR ' + Number(n || 0).toLocaleString('en-US');
 
 const router = express.Router();
 const wrap = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch((e) => {
@@ -12,11 +13,41 @@ const wrap = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch((e) => {
 const today = () => new Date().toISOString().split('T')[0];
 const TENDER_INCLUDE = { invites: true, bids: true };
 
+// Lazily emit "now live" / "closed" notifications as tenders cross those time boundaries
+// (no scheduler needed — runs idempotently on each bootstrap via the notified flags).
+async function sweepTenderNotifications() {
+  const now = Date.now();
+  const list = await prisma.tender.findMany({ include: TENDER_INCLUDE });
+  for (const t of list) {
+    const st = tenders.effectiveStatus(t, now);
+    const invited = t.invites.map(i => 'vendor:' + i.vendorId);
+    if (st === 'Live' && !t.liveNotified) {
+      await prisma.tender.update({ where: { id: t.id }, data: { liveNotified: true } });
+      await notifyMany(invited, `Bidding is now OPEN — ${t.ref}`, `The live revision window for "${t.title}" has started. All sealed bids are revealed and ranked lowest-first. Lower your bid to take the lead before the window closes.`, 'tender', t.ref);
+    }
+    if (st === 'Closed' && !t.closedNotified) {
+      await prisma.tender.update({ where: { id: t.id }, data: { closedNotified: true } });
+      const winner = tenders.rankBids(t.bids)[0];
+      if (winner) {
+        const vname = (await prisma.vendor.findUnique({ where: { id: winner.vendorId } }))?.name || 'vendor';
+        await notify('vendor:' + winner.vendorId, `You won the tender — ${t.ref}`, `Congratulations — your bid of ${pkrFmt(winner.amount)} was the lowest for "${t.title}". Tapsys procurement will proceed to award and raise the purchase order.`, 'tender', t.ref);
+        await notifyMany(invited.filter(r => r !== 'vendor:' + winner.vendorId), `Tender closed — ${t.ref}`, `Bidding for "${t.title}" has closed. Your bid was not the lowest this time. Thank you for participating.`, 'tender', t.ref);
+        await notify(t.createdBy, `Tender closed — ${t.ref}`, `"${t.title}" has closed. Lowest bid: ${pkrFmt(winner.amount)} by ${vname}. You can now award and issue the PO.`, 'tender', t.ref);
+      } else {
+        await notify(t.createdBy, `Tender closed with no bids — ${t.ref}`, `"${t.title}" has closed without any bids submitted.`, 'tender', t.ref);
+      }
+    }
+  }
+}
+
 // ─────────────────────────────────────────────────────────────
 // Bootstrap payload (role-scoped)
 // ─────────────────────────────────────────────────────────────
 async function buildBootstrap(principal) {
   const now = Date.now();
+  await sweepTenderNotifications();
+  const rid = principal.type === 'vendor' ? 'vendor:' + principal.id : principal.id;
+  const myNotes = (await prisma.notification.findMany({ where: { recipientId: rid } })).sort((a, b) => (a.ts < b.ts ? 1 : -1));
   const allVendors = await prisma.vendor.findMany();
   const vendorMap = {}; allVendors.forEach(v => { vendorMap[v.id] = v.name; });
 
@@ -29,7 +60,7 @@ async function buildBootstrap(principal) {
       prisma.tender.findMany({ where: { invites: { some: { vendorId: vid } } }, include: TENDER_INCLUDE }),
     ]);
     const tenderViews = tdrs.map(t => tenders.serializeTender(t, principal, now, vendorMap)).filter(Boolean);
-    return { mode: 'vendor', vendor: outVendor(vendor), purchaseOrders: pos, invoices, tenders: tenderViews };
+    return { mode: 'vendor', vendor: outVendor(vendor), purchaseOrders: pos, invoices, tenders: tenderViews, notifications: myNotes };
   }
   const [users, reqs, pos, quotes, receipts, invoices, coi, exceptions, overrides, audit, budgets, tdrs, cfg] = await Promise.all([
     prisma.user.findMany(),
@@ -62,6 +93,7 @@ async function buildBootstrap(principal) {
     auditLog: audit,
     budgets,
     tenders: tdrs.map(t => tenders.serializeTender(t, principal, now, vendorMap)),
+    notifications: myNotes,
     deptApprovalConfig: cfg.deptApprovalConfig,
   };
 }
@@ -479,6 +511,7 @@ router.post('/tenders', authenticate, requireRole('Procurement Lead'), wrap(asyn
     },
   });
   await addAudit(req.user.id, 'TENDER_OPENED', tender.ref, `Tender ${tender.ref} opened for sealed bids — ${vendorIds.length} vendor(s) invited. Bids open ${new Date(tender.openAt).toLocaleString()}.`, tender.procurementId);
+  await notifyMany(vendorIds.map(v => 'vendor:' + v), `Invitation to bid — ${tender.ref}`, `You are invited to submit a sealed bid for "${tender.title}". Bids open ${new Date(tender.openAt).toLocaleString()}. Submit your sealed bid any time before then — it stays confidential (hidden from Tapsys and other vendors) until opening, when the live revision window begins.`, 'tender', tender.ref);
   res.json(await buildBootstrap(req.user));
 }));
 
@@ -518,12 +551,19 @@ router.post('/tenders/:id/bid', authenticate, requireVendor, wrap(async (req, re
   const fresh = await prisma.tender.findUnique({ where: { id: t.id }, include: TENDER_INCLUDE });
   const leaderAfter = tenders.rankBids(fresh.bids)[0];
   let extended = false;
-  if (!leaderBefore || (leaderAfter && leaderAfter.vendorId !== leaderBefore.vendorId)) {
+  const leadChanged = !leaderBefore || (leaderAfter && leaderAfter.vendorId !== leaderBefore.vendorId);
+  if (leadChanged) {
     const curEnds = tenders.endsAtMs(fresh);
     const newEnds = Math.max(curEnds, now + (t.extensionMin || 10) * 60000);
     if (newEnds > curEnds) { await prisma.tender.update({ where: { id: t.id }, data: { revisionEndsAt: new Date(newEnds).toISOString() } }); extended = true; }
   }
   await addAudit('vendor:' + vid, 'BID_REVISED', t.ref, `Bid revised down to PKR ${amount.toLocaleString()} for ${t.ref}${extended ? ` — lead changed, window extended ${t.extensionMin}m.` : '.'}`, t.procurementId);
+  // Notify on lead change: new leader + everyone they overtook.
+  if (leadChanged && leaderAfter) {
+    const invited = fresh.invites.map(i => 'vendor:' + i.vendorId);
+    await notify('vendor:' + leaderAfter.vendorId, `You now lead — ${t.ref}`, `Your revised bid of ${pkrFmt(leaderAfter.amount)} is now the lowest for "${t.title}". The window may extend if another vendor undercuts you.`, 'tender', t.ref);
+    await notifyMany(invited.filter(r => r !== 'vendor:' + leaderAfter.vendorId), `You've been outbid — ${t.ref}`, `A lower bid of ${pkrFmt(leaderAfter.amount)} now leads "${t.title}". The window was extended — revise your bid lower to retake the lead before it closes.`, 'tender', t.ref);
+  }
   res.json(await buildBootstrap(req.user));
 }));
 
@@ -537,6 +577,14 @@ router.post('/tenders/:id/award', authenticate, requireRole('Procurement Lead'),
   await prisma.tender.update({ where: { id: t.id }, data: { status: 'Closed', selectedVendorId: winner.vendorId } });
   const vname = (await prisma.vendor.findUnique({ where: { id: winner.vendorId } }))?.name || 'vendor';
   await addAudit(req.user.id, 'TENDER_AWARDED', t.ref, `Tender ${t.ref} awarded to ${vname} at PKR ${winner.amount.toLocaleString()} (lowest bid).`, t.procurementId);
+  await notify('vendor:' + winner.vendorId, `Tender awarded to you — ${t.ref}`, `"${t.title}" has been formally awarded to you at ${pkrFmt(winner.amount)}. Tapsys procurement will issue the purchase order shortly.`, 'tender', t.ref);
+  res.json(await buildBootstrap(req.user));
+}));
+
+// Notifications — mark the caller's notifications as read
+router.post('/notifications/read-all', authenticate, wrap(async (req, res) => {
+  const rid = req.user.type === 'vendor' ? 'vendor:' + req.user.vendorId : req.user.id;
+  await prisma.notification.updateMany({ where: { recipientId: rid, read: false }, data: { read: true } });
   res.json(await buildBootstrap(req.user));
 }));
 

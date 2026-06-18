@@ -221,6 +221,8 @@ model Tender {
   extensionMin     Float          @default(10)
   revisionEndsAt   String?        // ISO; set when Live, extended on lead change
   status           String         @default("Sealed") // Sealed | Live | Closed | Cancelled
+  liveNotified     Boolean        @default(false)
+  closedNotified   Boolean        @default(false)
   selectedVendorId String?
   notes            String         @default("")
   invites          TenderInvite[]
@@ -243,6 +245,18 @@ model Bid {
   revisions Int    @default(0)
   createdAt String
   updatedAt String
+}
+
+model Notification {
+  id          String  @id @default(cuid())
+  recipientId String          // user id (e.g. 'u3') or 'vendor:<id>'
+  subject     String
+  body        String  @default("")
+  category    String  @default("tender")
+  refType     String  @default("")
+  refId       String  @default("")
+  ts          String
+  read        Boolean @default(false)
 }
 
 model Config {

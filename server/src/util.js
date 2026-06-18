@@ -36,4 +36,13 @@ function outCoi(c) {
   return { ...c, procRefs };
 }
 
-module.exports = { addAudit, getConfig, nextProcId, publicUser, outVendor, outCoi };
+// Create an email-style notification for a recipient (user id or 'vendor:<id>').
+async function notify(recipientId, subject, body, refType = 'tender', refId = '') {
+  if (!recipientId) return;
+  return prisma.notification.create({ data: { recipientId, subject, body, category: refType, refType, refId, ts: new Date().toISOString(), read: false } });
+}
+async function notifyMany(recipientIds, subject, body, refType = 'tender', refId = '') {
+  for (const r of (recipientIds || [])) await notify(r, subject, body, refType, refId);
+}
+
+module.exports = { addAudit, getConfig, nextProcId, publicUser, outVendor, outCoi, notify, notifyMany };

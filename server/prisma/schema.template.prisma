@@ -189,12 +189,60 @@ model AuditLog {
 }
 
 model Budget {
+  id         String       @id @default(cuid())
+  dept       String
+  fiscalYear String       @default("FY2024-25")
+  code       String       @default("")
+  total      Float        @default(0)
+  spent      Float        @default(0)
+  committed  Float        @default(0)
+  items      BudgetItem[]
+}
+
+model BudgetItem {
+  id       String @id @default(cuid())
+  budgetId String
+  budget   Budget @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  name     String
+  amount   Float  @default(0)
+}
+
+model Tender {
+  id               String         @id @default(cuid())
+  ref              String         @unique
+  prId             String?
+  procurementId    String         @default("")
+  title            String
+  dept             String         @default("")
+  createdBy        String
+  createdAt        String
+  openAt           String         // ISO datetime when sealed bids open
+  windowMin        Float          @default(30)
+  extensionMin     Float          @default(10)
+  revisionEndsAt   String?        // ISO; set when Live, extended on lead change
+  status           String         @default("Sealed") // Sealed | Live | Closed | Cancelled
+  selectedVendorId String?
+  notes            String         @default("")
+  invites          TenderInvite[]
+  bids             Bid[]
+}
+
+model TenderInvite {
+  id       String @id @default(cuid())
+  tenderId String
+  tender   Tender @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+  vendorId String
+}
+
+model Bid {
   id        String @id @default(cuid())
-  dept      String
-  code      String
-  total     Float
-  spent     Float  @default(0)
-  committed Float  @default(0)
+  tenderId  String
+  tender    Tender @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+  vendorId  String
+  amount    Float
+  revisions Int    @default(0)
+  createdAt String
+  updatedAt String
 }
 
 model Config {

@@ -563,17 +563,17 @@ const Store = {
     }
     else{this._d=JSON.parse(JSON.stringify(SEED));}
   },
-  initEmpty(){this._d={users:[],vendors:[],requisitions:[],purchaseOrders:[],quotes:[],receipts:[],invoices:[],coi:[],exceptions:[],overrideRequests:[],auditLog:[],budgets:[],deptApprovalConfig:{}};},
+  initEmpty(){this._d={users:[],vendors:[],requisitions:[],purchaseOrders:[],quotes:[],receipts:[],invoices:[],coi:[],exceptions:[],overrideRequests:[],auditLog:[],budgets:[],tenders:[],deptApprovalConfig:{}};},
   // Replace the in-memory cache with a fresh server bootstrap (no localStorage write in backend mode).
   loadBootstrap(bs){
-    const base={users:[],vendors:[],requisitions:[],purchaseOrders:[],quotes:[],receipts:[],invoices:[],coi:[],exceptions:[],overrideRequests:[],auditLog:[],budgets:[],deptApprovalConfig:{}};
+    const base={users:[],vendors:[],requisitions:[],purchaseOrders:[],quotes:[],receipts:[],invoices:[],coi:[],exceptions:[],overrideRequests:[],auditLog:[],budgets:[],tenders:[],deptApprovalConfig:{}};
     if(bs.mode==='vendor'){
-      this._d=Object.assign(base,{purchaseOrders:bs.purchaseOrders||[],invoices:bs.invoices||[],vendors:bs.vendor?[bs.vendor]:[]});
+      this._d=Object.assign(base,{purchaseOrders:bs.purchaseOrders||[],invoices:bs.invoices||[],vendors:bs.vendor?[bs.vendor]:[],tenders:bs.tenders||[]});
     } else {
       this._d=Object.assign(base,{
         users:bs.users||[],vendors:bs.vendors||[],requisitions:bs.requisitions||[],purchaseOrders:bs.purchaseOrders||[],
         quotes:bs.quotes||[],receipts:bs.receipts||[],invoices:bs.invoices||[],coi:bs.coi||[],exceptions:bs.exceptions||[],
-        overrideRequests:bs.overrideRequests||[],auditLog:bs.auditLog||[],budgets:bs.budgets||[],deptApprovalConfig:bs.deptApprovalConfig||{},
+        overrideRequests:bs.overrideRequests||[],auditLog:bs.auditLog||[],budgets:bs.budgets||[],tenders:bs.tenders||[],deptApprovalConfig:bs.deptApprovalConfig||{},
       });
     }
   },
@@ -809,6 +809,7 @@ const App = {
       vendors.map(v=>row(v[0],'var(--warning-bg)','var(--warning-t)',v[1],v[2]+' · '+v[3],v[3])).join('');
   },
   navigate(view,params={}){
+    this._clearPoll();
     this.view=view;this.params=params;
     this._renderNav();
     this._renderContent();
@@ -817,6 +818,18 @@ const App = {
     const pending=this._getPendingActions();
     const dot=document.getElementById('notif-dot');
     if(dot)dot.classList.toggle('hidden',pending.length===0);
+    this._maybePoll();
+  },
+  _clearPoll(){ if(this._pollTimer){clearInterval(this._pollTimer);this._pollTimer=null;} },
+  // Live tender detail auto-refreshes so bids/countdown stay current.
+  _maybePoll(){
+    if(!API.on)return;
+    if(this.view!=='tender-detail'&&this.view!=='vendor-tender-detail')return;
+    const id=this.params&&this.params.id;
+    this._pollTimer=setInterval(async()=>{
+      if((this.view!=='tender-detail'&&this.view!=='vendor-tender-detail')||(this.params&&this.params.id)!==id){this._clearPoll();return;}
+      try{ await this.hydrate(); this._renderContent(); }catch(e){}
+    },2000);
   },
   switchUser(value){
     if(typeof value==='string'&&value.startsWith('vendor:')){
@@ -836,6 +849,7 @@ const App = {
   _updateNotif(){
     const pending=this._getPendingActions();const dot=document.getElementById('notif-dot');if(dot)dot.classList.toggle('hidden',pending.length===0);
   },
+  _vendorOpenTenders(){ if(!this.currentVendor)return 0; return Store.get('tenders').filter(t=>t.status==='Sealed'||t.status==='Live').length; },
   _getPendingActions(){
     if(this.currentVendor){
       // Vendor's to-do: received POs not yet invoiced
@@ -852,6 +866,7 @@ const App = {
     const items=this.currentVendor?[
       {id:'vendor-dashboard',label:'Dashboard',icon:'home',section:null},
       {id:'vendor-pos',label:'My Purchase Orders',icon:'file_text',section:'MY ACCOUNT'},
+      {id:'vendor-tenders',label:'Tenders & Bids',icon:'quote',section:null,badge:this._vendorOpenTenders()||null},
       {id:'vendor-invoice-new',label:'Submit Invoice',icon:'dollar',section:null,badge:pending||null},
       {id:'vendor-invoices',label:'My Invoices & Payments',icon:'package',section:null},
       {id:'vendor-profile',label:'Company Profile',icon:'building',section:null},
@@ -861,9 +876,11 @@ const App = {
       {id:'approvals',label:'Approval Queue',icon:'check_circle',section:null,badge:pending||null},
       {id:'purchase-orders',label:'Purchase Orders',icon:'file_text',section:null},
       {id:'quotes',label:'Quotes & Sourcing',icon:'quote',section:'SOURCING & VENDORS'},
+      {id:'tenders',label:'Tenders & Bidding',icon:'quote',section:null},
       {id:'vendors',label:'Vendor Registry',icon:'building',section:null},
       {id:'receipts',label:'Receipt Confirmation',icon:'package',section:'FINANCE'},
       {id:'invoices',label:'Invoice Matching',icon:'dollar',section:null},
+      {id:'budgets',label:'Budgets',icon:'bar_chart',section:null},
       {id:'compliance',label:'COI & Compliance',icon:'shield',section:'COMPLIANCE'},
       {id:'exceptions',label:'Exceptions & Waivers',icon:'alert',section:null},
       {id:'reports',label:'Reports & Analytics',icon:'bar_chart',section:'ANALYTICS'},
@@ -897,8 +914,8 @@ const App = {
   },
   _renderBreadcrumb(){
     const el=document.getElementById('breadcrumb');if(!el)return;
-    const labels={dashboard:'Dashboard',requisitions:'Purchase Requisitions','pr-detail':'PR Detail','pr-new':'New Requisition',approvals:'Approval Queue','purchase-orders':'Purchase Orders',vendors:'Vendor Registry','vendor-detail':'Vendor Detail',quotes:'Quotes & Sourcing',receipts:'Receipt Confirmation',invoices:'Invoice Matching',compliance:'COI & Compliance',exceptions:'Exceptions & Waivers',reports:'Reports & Analytics','audit-trail':'Audit Trail',settings:'Settings','vendor-dashboard':'Dashboard','vendor-pos':'My Purchase Orders','vendor-invoice-new':'Submit Invoice','vendor-invoices':'My Invoices & Payments','vendor-profile':'Company Profile'};
-    const sections={dashboard:null,requisitions:'Procurement',approvals:'Procurement','purchase-orders':'Procurement',vendors:'Vendors','vendor-detail':'Vendors',quotes:'Sourcing',receipts:'Finance',invoices:'Finance',compliance:'Compliance',exceptions:'Compliance',reports:'Analytics','audit-trail':'Analytics',settings:'Admin','vendor-pos':'Vendor Portal','vendor-invoice-new':'Vendor Portal','vendor-invoices':'Vendor Portal','vendor-profile':'Vendor Portal'};
+    const labels={dashboard:'Dashboard',requisitions:'Purchase Requisitions','pr-detail':'PR Detail','pr-new':'New Requisition',approvals:'Approval Queue','purchase-orders':'Purchase Orders',vendors:'Vendor Registry','vendor-detail':'Vendor Detail',quotes:'Quotes & Sourcing',tenders:'Tenders & Bidding','tender-detail':'Tender',budgets:'Budgets',receipts:'Receipt Confirmation',invoices:'Invoice Matching',compliance:'COI & Compliance',exceptions:'Exceptions & Waivers',reports:'Reports & Analytics','audit-trail':'Audit Trail',settings:'Settings','vendor-dashboard':'Dashboard','vendor-pos':'My Purchase Orders','vendor-tenders':'Tenders & Bids','vendor-tender-detail':'Tender','vendor-invoice-new':'Submit Invoice','vendor-invoices':'My Invoices & Payments','vendor-profile':'Company Profile'};
+    const sections={dashboard:null,requisitions:'Procurement',approvals:'Procurement','purchase-orders':'Procurement',vendors:'Vendors','vendor-detail':'Vendors',quotes:'Sourcing',tenders:'Sourcing','tender-detail':'Sourcing',budgets:'Finance',receipts:'Finance',invoices:'Finance',compliance:'Compliance',exceptions:'Compliance',reports:'Analytics','audit-trail':'Analytics',settings:'Admin','vendor-pos':'Vendor Portal','vendor-tenders':'Vendor Portal','vendor-tender-detail':'Vendor Portal','vendor-invoice-new':'Vendor Portal','vendor-invoices':'Vendor Portal','vendor-profile':'Vendor Portal'};
     const section=sections[this.view];
     const label=labels[this.view]||this.view;
     el.innerHTML=section?`<span>${section}</span><span class="breadcrumb-sep">›</span><strong>${label}</strong>`:`<strong>${label}</strong>`;
@@ -909,7 +926,7 @@ const App = {
       const vrenders={
         'vendor-dashboard':Views.vendorDashboard,'vendor-pos':Views.vendorPOs,
         'vendor-invoice-new':Views.vendorSubmitInvoice,'vendor-invoices':Views.vendorInvoices,
-        'vendor-profile':Views.vendorProfile,
+        'vendor-profile':Views.vendorProfile,'vendor-tenders':Views.vendorTenders,'vendor-tender-detail':Views.vendorTenderDetail,
       };
       const vfn=vrenders[this.view]||Views.vendorDashboard;
       el.innerHTML=vfn.call(Views,this.params);
@@ -918,7 +935,8 @@ const App = {
     const renders={
       dashboard:Views.dashboard,requisitions:Views.requisitions,'pr-detail':Views.prDetail,'pr-new':Views.prNew,
       approvals:Views.approvals,'purchase-orders':Views.purchaseOrders,vendors:Views.vendors,'vendor-detail':Views.vendorDetail,
-      quotes:Views.quotes,receipts:Views.receipts,invoices:Views.invoices,compliance:Views.compliance,
+      quotes:Views.quotes,tenders:Views.tenders,'tender-detail':Views.tenderDetail,budgets:Views.budgets,
+      receipts:Views.receipts,invoices:Views.invoices,compliance:Views.compliance,
       exceptions:Views.exceptions,reports:Views.reports,'audit-trail':Views.auditTrail,settings:Views.settings,
     };
     const fn=renders[this.view];
@@ -968,8 +986,16 @@ function dateTime(s){if(!s)return'—';try{return new Date(s).toLocaleString('en
 function badge(text,color){return `<span class="badge badge-${color||'gray'} badge-dot">${text}</span>`;}
 function tierBadge(tier){const t=DOA.find(d=>d.tier===tier)||DOA[0];return `<span class="badge badge-${t.color}" title="Requires: ${t.approvers.join(', ')}">T${tier}</span>`;}
 function statusBadge(status){
-  const map={'Draft':'gray','Pending Approval':'info','Approved':'success','Rejected':'danger','In Sourcing':'purple','PO Issued':'cyan','Goods Received':'info','Invoiced':'warning','Paid':'success','Cancelled':'gray','Active':'success','Onboarding':'info','Suspended':'warning','Blacklisted':'danger','Inactive':'gray','Matched':'success','Discrepancy':'danger','Pending':'warning','Pending Receipt':'warning'};
+  const map={'Draft':'gray','Pending Approval':'info','Approved':'success','Rejected':'danger','In Sourcing':'purple','PO Issued':'cyan','Goods Received':'info','Invoiced':'warning','Paid':'success','Cancelled':'gray','Active':'success','Onboarding':'info','Suspended':'warning','Blacklisted':'danger','Inactive':'gray','Matched':'success','Discrepancy':'danger','Pending':'warning','Pending Receipt':'warning','Sealed':'info','Live':'success','Closed':'gray'};
   return badge(status,map[status]||'gray');
+}
+// Time remaining until an ISO timestamp, e.g. "4m 32s" / "Opens in 2m" / "—".
+function timeLeft(iso){
+  if(!iso)return'—';
+  const ms=new Date(iso).getTime()-Date.now();
+  if(ms<=0)return'0s';
+  const s=Math.floor(ms/1000),m=Math.floor(s/60);
+  return m>0?`${m}m ${s%60}s`:`${s}s`;
 }
 function catBadge(cat){return badge(cat,CATS[cat]?.color||'gray');}
 function avatar(user,size=28){
@@ -2087,6 +2113,122 @@ vendorProfile(){
 </div>`;
 },
 
+// ═══════════════ BUDGETS ═══════════════
+budgets(){
+  const isCFO=App.currentUser?.role==='Finance / CFO';
+  const buds=Store.get('budgets');
+  const byFY={}; buds.forEach(b=>{(byFY[b.fiscalYear]=byFY[b.fiscalYear]||[]).push(b);});
+  const fys=Object.keys(byFY).sort().reverse();
+  return `
+<div class="page-header"><div><div class="page-title">Budgets</div><div class="page-sub">Departmental budgets by fiscal year, with sub-items</div></div>
+${isCFO?`<div class="page-actions"><button class="btn btn-primary" onclick="editBudgetModal()">${I('plus_sm')} New / Edit Budget</button></div>`:''}</div>
+${!isCFO?`<div class="policy-info" style="margin-bottom:16px"><div class="pi-items">Budgets are set by Finance / CFO. You are viewing in read-only mode.</div></div>`:''}
+${fys.length?fys.map(fy=>`
+<div class="card" style="margin-bottom:16px">
+  <div class="card-header"><div class="card-title">Fiscal Year ${fy}</div><div class="card-sub">${byFY[fy].length} department budget${byFY[fy].length!==1?'s':''}</div></div>
+  <div class="card-body" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px">
+  ${byFY[fy].map(b=>{const avail=b.total-b.spent-b.committed;return `
+    <div style="border:1px solid var(--border);border-radius:var(--r);padding:14px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+        <div><div style="font-weight:700">${b.dept}</div><div class="text-muted" style="font-size:12px">${b.code}</div></div>
+        ${isCFO?`<button class="btn btn-ghost btn-sm" onclick="editBudgetModal('${b.dept}','${b.fiscalYear}')">Edit</button>`:''}
+      </div>
+      <div class="detail-row"><span class="detail-key">Allocated</span><span class="detail-val fw-bold">${pkr(b.total)}</span></div>
+      <div class="detail-row"><span class="detail-key">Committed</span><span class="detail-val">${pkr(b.committed)}</span></div>
+      <div class="detail-row"><span class="detail-key">Spent</span><span class="detail-val">${pkr(b.spent)}</span></div>
+      <div class="detail-row"><span class="detail-key">Available</span><span class="detail-val fw-bold" style="color:${avail<0?'var(--danger)':'var(--success)'}">${pkr(avail)}</span></div>
+      <div style="margin-top:10px"><div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:4px">Sub-items</div>
+      ${(b.items||[]).length?(b.items||[]).map(it=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:3px 0;border-bottom:1px solid var(--bg)"><span>${it.name}</span><span class="fw-bold">${pkr(it.amount)}</span></div>`).join(''):'<div class="text-muted" style="font-size:12px">No sub-items</div>'}</div>
+    </div>`;}).join('')}
+  </div>
+</div>`).join(''):`<div class="card"><div class="card-body"><div class="empty-state"><div class="empty-icon">📊</div><div class="empty-title">No budgets yet</div>${isCFO?'<button class="btn btn-primary mt-3" onclick="editBudgetModal()">Create the first budget</button>':''}</div></div></div>`}`;
+},
+
+// ═══════════════ TENDERS (internal) ═══════════════
+tenders(){
+  const isPL=App.currentUser?.role==='Procurement Lead';
+  const ts=Store.get('tenders');
+  return `
+<div class="page-header"><div><div class="page-title">Tenders & Bidding</div><div class="page-sub">Sealed-bid reverse auctions — lowest compliant bid wins (Section 9)</div></div>
+${isPL?`<div class="page-actions"><button class="btn btn-primary" onclick="newTenderModal()">${I('plus_sm')} New Tender</button></div>`:''}</div>
+<div class="policy-info" style="margin-bottom:16px"><div class="pi-items">Bids are <strong>sealed</strong> — no amount is visible to anyone until the published opening time. At opening, all amounts are revealed and invited vendors may lower their bid during a live window; the window extends whenever the lead changes, until no one lowers further.</div></div>
+<div class="card"><div class="table-wrap"><table><thead><tr><th>Ref</th><th>Title</th><th>Dept</th><th>Invited</th><th>Bids</th><th>Status</th><th>Opens / Closes</th><th></th></tr></thead>
+<tbody>${ts.length?ts.map(t=>`<tr class="clickable" onclick="App.navigate('tender-detail',{id:'${t.id}'})">
+  <td class="td-code">${t.ref}</td><td class="td-primary">${t.title}</td><td>${t.dept||'—'}</td>
+  <td>${t.invitedCount}</td><td>${t.bidCount}</td><td>${statusBadge(t.status)}</td>
+  <td class="text-muted no-wrap" style="font-size:12px">${t.status==='Sealed'?'Opens '+dateTime(t.openAt):t.status==='Live'?'Closes in '+timeLeft(t.revisionEndsAt):'Closed'}</td>
+  <td><button class="btn btn-ghost btn-sm">View →</button></td></tr>`).join(''):`<tr><td colspan="8"><div class="empty-state" style="padding:24px"><div class="empty-icon">⚖️</div><div class="empty-title">No tenders yet</div>${isPL?'<button class="btn btn-primary mt-3" onclick="newTenderModal()">Create a tender</button>':''}</div></td></tr>`}</tbody></table></div></div>`;
+},
+tenderDetail({id}={}){
+  const t=Store.get('tenders').find(x=>x.id===id);
+  if(!t)return`<div class="empty-state"><div class="empty-title">Tender not found</div><button class="btn btn-outline mt-3" onclick="App.navigate('tenders')">Back</button></div>`;
+  const isPL=App.currentUser?.role==='Procurement Lead';
+  const head=`<div style="display:flex;gap:8px;align-items:center;margin-bottom:16px">
+    <button class="btn btn-ghost btn-sm" onclick="App.navigate('tenders')">← Back</button><span class="breadcrumb-sep">|</span>
+    <span class="td-code" style="font-size:15px">${t.ref}</span>${statusBadge(t.status)}${t.procurementId?`<span class="badge badge-info">${t.procurementId}</span>`:''}</div>`;
+  const meta=`<div class="card" style="margin-bottom:16px"><div class="card-body">
+    <div style="font-weight:700;font-size:16px;margin-bottom:8px">${t.title}</div>
+    <div class="detail-row"><span class="detail-key">Bid opening</span><span class="detail-val">${dateTime(t.openAt)}</span></div>
+    <div class="detail-row"><span class="detail-key">Revision window</span><span class="detail-val">${t.windowMin} min · ${t.extensionMin} min anti-snipe extension</span></div>
+    <div class="detail-row"><span class="detail-key">Invited vendors</span><span class="detail-val">${(t.invitedVendors||[]).map(v=>v.name).join(', ')}</span></div>
+  </div></div>`;
+  let body='';
+  if(t.status==='Sealed'){
+    body=`<div class="policy-warn" style="margin-bottom:16px">${I('shield')} <strong>Sealed.</strong> Bids open ${dateTime(t.openAt)} — <strong id="tdr-countdown">${timeLeft(t.openAt)}</strong> remaining. No bid amounts are visible to anyone (including procurement) until opening.</div>
+    <div class="card"><div class="card-header"><div class="card-title">Submission status</div><div class="card-sub">${(t.bids||[]).filter(b=>b.submitted).length} of ${t.invitedCount} received</div></div><div class="table-wrap"><table><thead><tr><th>Vendor</th><th>Sealed bid received</th></tr></thead><tbody>
+    ${(t.bids||[]).map(b=>`<tr><td class="td-primary">${b.vendorName}</td><td>${b.submitted?'<span class="badge badge-success">Received</span>':'<span class="badge badge-gray">Awaiting</span>'}</td></tr>`).join('')}</tbody></table></div></div>`;
+  } else {
+    const live=t.status==='Live';
+    body=`<div class="${live?'policy-info':'policy-warn'}" style="margin-bottom:16px">${live?`${I('warn_sm')} <strong>LIVE auction.</strong> Closes in <strong id="tdr-countdown">${timeLeft(t.revisionEndsAt)}</strong>. The window extends by ${t.extensionMin} min whenever the lead changes — bidding ends only when no one lowers further.`:`<strong>Bidding closed.</strong> Lowest compliant bid wins.`}</div>
+    <div class="card"><div class="card-header"><div class="card-title">Bid ranking — lowest first</div>${t.bids&&t.bids[0]?`<span class="card-sub">Leader: ${t.bids[0].vendorName} @ ${pkr(t.bids[0].amount)}</span>`:''}</div>
+    <div class="table-wrap"><table><thead><tr><th>Rank</th><th>Vendor</th><th>Bid (PKR)</th><th>Revisions</th></tr></thead><tbody>
+    ${(t.bids||[]).map(b=>`<tr style="${b.rank===1?'background:var(--success-bg)':''}"><td><span class="badge badge-${b.rank===1?'success':'gray'}">#${b.rank}</span></td><td class="td-primary">${b.vendorName}</td><td class="fw-bold">${pkr(b.amount)}</td><td class="text-muted">${b.revisions}</td></tr>`).join('')||'<tr><td colspan="4" class="text-muted">No bids were submitted</td></tr>'}
+    </tbody></table></div></div>
+    ${t.status==='Closed'&&isPL?`<div style="margin-top:12px;display:flex;gap:8px;align-items:center">${t.awarded?`<span class="badge badge-success">Awarded to ${(t.invitedVendors.find(v=>v.id===t.selectedVendorId)||{}).name}</span>${t.prId?`<button class="btn btn-primary" onclick="App.navigate('pr-detail',{id:'${t.prId}'})">Go to PR to issue PO →</button>`:''}`:`${(t.bids||[]).length?`<button class="btn btn-success" onclick="doAwardTender('${t.id}')">${I('check_sm')} Award to lowest bidder</button>`:'<span class="text-muted">No bids to award.</span>'}`}</div>`:''}`;
+  }
+  return head+meta+body;
+},
+
+// ═══════════════ TENDERS (vendor portal) ═══════════════
+vendorTenders(){
+  const ts=Store.get('tenders');
+  return `
+<div class="page-header"><div><div class="page-title">Tenders & Bids</div><div class="page-sub">Tapsys invitations to bid — sealed until opening</div></div></div>
+<div class="card"><div class="table-wrap"><table><thead><tr><th>Ref</th><th>Title</th><th>Status</th><th>Opens / Closes</th><th>My bid</th><th></th></tr></thead>
+<tbody>${ts.length?ts.map(t=>`<tr class="clickable" onclick="App.navigate('vendor-tender-detail',{id:'${t.id}'})">
+  <td class="td-code">${t.ref}</td><td class="td-primary">${t.title}</td><td>${statusBadge(t.status)}</td>
+  <td class="text-muted no-wrap" style="font-size:12px">${t.status==='Sealed'?'Opens '+dateTime(t.openAt):t.status==='Live'?'Closes in '+timeLeft(t.revisionEndsAt):'Closed'}</td>
+  <td>${t.myBid?pkr(t.myBid.amount):'<span class="text-muted">—</span>'}</td>
+  <td><button class="btn btn-ghost btn-sm">${t.status==='Closed'?'View':'Bid →'}</button></td></tr>`).join(''):`<tr><td colspan="6"><div class="empty-state" style="padding:24px"><div class="empty-icon">⚖️</div><div class="empty-title">No tender invitations</div><div class="empty-sub">When Tapsys invites you to bid, it appears here.</div></div></td></tr>`}</tbody></table></div></div>`;
+},
+vendorTenderDetail({id}={}){
+  const t=Store.get('tenders').find(x=>x.id===id);
+  if(!t)return`<div class="empty-state"><div class="empty-title">Tender not found</div><button class="btn btn-outline mt-3" onclick="App.navigate('vendor-tenders')">Back</button></div>`;
+  const head=`<div style="display:flex;gap:8px;align-items:center;margin-bottom:16px"><button class="btn btn-ghost btn-sm" onclick="App.navigate('vendor-tenders')">← Back</button><span class="breadcrumb-sep">|</span><span class="td-code" style="font-size:15px">${t.ref}</span>${statusBadge(t.status)}</div>`;
+  const meta=`<div class="card" style="margin-bottom:16px"><div class="card-body"><div style="font-weight:700;font-size:16px;margin-bottom:8px">${t.title}</div>
+    <div class="detail-row"><span class="detail-key">Bid opening</span><span class="detail-val">${dateTime(t.openAt)}</span></div>
+    <div class="detail-row"><span class="detail-key">Vendors invited</span><span class="detail-val">${t.invitedCount}</span></div>
+    <div class="detail-row"><span class="detail-key">Your current bid</span><span class="detail-val fw-bold">${t.myBid?pkr(t.myBid.amount):'Not submitted'}</span></div>
+  </div></div>`;
+  let body='';
+  if(t.status==='Sealed'){
+    body=`<div class="policy-warn" style="margin-bottom:16px">${I('shield')} <strong>Sealed bidding.</strong> Bids open ${dateTime(t.openAt)} (<strong id="tdr-countdown">${timeLeft(t.openAt)}</strong>). Your bid is hidden from Tapsys and other vendors until opening — you may update it any time before then.</div>
+    <button class="btn btn-primary" onclick="submitBidModal('${t.id}')">${t.myBid?'Update sealed bid':'Submit sealed bid'}</button>`;
+  } else if(t.status==='Live'){
+    body=`<div class="policy-info" style="margin-bottom:16px">${I('warn_sm')} <strong>LIVE — closes in <span id="tdr-countdown">${timeLeft(t.revisionEndsAt)}</span>.</strong> Lower your bid to reach rank #1. Each time the lead changes the window extends ${t.extensionMin} min, so you keep getting a chance to respond.</div>
+    <div class="card" style="margin-bottom:12px"><div class="card-header"><div class="card-title">Live ranking — lowest first</div>${t.leaderIsMe?'<span class="badge badge-success">You are #1</span>':'<span class="badge badge-warning">You are not leading</span>'}</div>
+    <div class="table-wrap"><table><thead><tr><th>Rank</th><th>Bidder</th><th>Amount</th></tr></thead><tbody>
+    ${(t.bids||[]).map(b=>`<tr style="${b.isMe?'background:var(--primary-bg)':''}"><td><span class="badge badge-${b.rank===1?'success':'gray'}">#${b.rank}</span></td><td>${b.label}</td><td class="fw-bold">${pkr(b.amount)}</td></tr>`).join('')}
+    </tbody></table></div></div>
+    <button class="btn btn-primary" onclick="submitBidModal('${t.id}')">${I('dollar')} Revise my bid (lower to win)</button>`;
+  } else {
+    body=`<div class="${t.winnerIsMe?'policy-info':'policy-warn'}" style="margin-bottom:16px">${t.winnerIsMe?'🏆 <strong>You won this tender</strong> with the lowest bid.':'<strong>Tender closed.</strong> The lowest bid won.'}</div>
+    <div class="card"><div class="card-header"><div class="card-title">Final ranking</div></div><div class="table-wrap"><table><thead><tr><th>Rank</th><th>Bidder</th><th>Amount</th></tr></thead><tbody>
+    ${(t.bids||[]).map(b=>`<tr style="${b.isMe?'background:var(--primary-bg)':''}"><td>#${b.rank}</td><td>${b.label}</td><td class="fw-bold">${pkr(b.amount)}</td></tr>`).join('')}</tbody></table></div></div>`;
+  }
+  return head+meta+body;
+},
+
 };// end Views
 
 // ════════════════════════════════════════════
@@ -2853,6 +2995,107 @@ async function doVendorSubmitInvoice(){
   Store.addAudit('vendor:'+v.id,action,ref,detail,po.procurementId||'');
   Toast.success(`Invoice ${ref} submitted to Tapsys.`);
   App.navigate('vendor-invoices');
+}
+
+// ── Budgets (CFO) ────────────────────────────
+let _budgetItems=[];
+function editBudgetModal(dept,fy){
+  const existing=dept&&fy?Store.get('budgets').find(b=>b.dept===dept&&b.fiscalYear===fy):null;
+  _budgetItems=existing?(existing.items||[]).map(i=>({name:i.name,amount:i.amount})):[{name:'',amount:''}];
+  const depts=[...new Set([...Store.get('budgets').map(b=>b.dept),...Store.get('users').map(u=>u.dept)])].filter(Boolean);
+  Modal.open(existing?`Edit Budget — ${dept}`:'New Department Budget',
+    `<div class="policy-info mb-3"><div class="pi-title">Fiscal-year budget</div><div class="pi-items">Allocate a department's budget for a fiscal year across sub-items. The total is the sum of all sub-items.</div></div>
+    <div class="form-row">
+      <div class="form-group"><label>Department <span class="required">*</span></label>${existing?`<input class="form-input" id="bg-dept" value="${dept}" readonly>`:`<select class="form-select" id="bg-dept">${depts.map(d=>`<option>${d}</option>`).join('')}</select>`}</div>
+      <div class="form-group"><label>Fiscal Year <span class="required">*</span></label><input class="form-input" id="bg-fy" value="${existing?fy:'FY2025-26'}" placeholder="FY2025-26"></div>
+    </div>
+    <div class="form-group"><label>Sub-items</label><div id="bg-items"></div>
+      <button class="btn btn-outline btn-sm mt-2" onclick="_addBudgetItem()">${I('plus_sm')} Add sub-item</button></div>
+    <div class="detail-row" style="border-top:1px solid var(--border);margin-top:8px;padding-top:8px"><span class="detail-key">Total allocation</span><span class="detail-val fw-bold" id="bg-total">—</span></div>`,
+    `<button class="btn btn-outline" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="doSaveBudget()">Save Budget</button>`,
+    true
+  );
+  _renderBudgetItems();
+}
+function _renderBudgetItems(){
+  const wrap=document.getElementById('bg-items');if(!wrap)return;
+  wrap.innerHTML=_budgetItems.map((it,i)=>`<div class="form-row" style="margin-bottom:6px"><div class="form-group" style="margin:0"><input class="form-input" placeholder="Sub-item name" value="${(it.name||'').replace(/"/g,'&quot;')}" oninput="_budgetItems[${i}].name=this.value"></div><div class="form-group" style="margin:0;max-width:170px"><input class="form-input" type="number" placeholder="Amount" value="${it.amount}" oninput="_budgetItems[${i}].amount=this.value;_budgetTotal()"></div><button class="btn btn-ghost btn-sm" onclick="_removeBudgetItem(${i})">${I('x_sm')}</button></div>`).join('');
+  _budgetTotal();
+}
+function _addBudgetItem(){_budgetItems.push({name:'',amount:''});_renderBudgetItems();}
+function _removeBudgetItem(i){_budgetItems.splice(i,1);if(!_budgetItems.length)_budgetItems.push({name:'',amount:''});_renderBudgetItems();}
+function _budgetTotal(){const el=document.getElementById('bg-total');if(el)el.textContent=pkr(_budgetItems.reduce((s,i)=>s+(parseFloat(i.amount)||0),0));}
+async function doSaveBudget(){
+  const dept=(document.getElementById('bg-dept')||{}).value;
+  const fiscalYear=(document.getElementById('bg-fy')||{}).value?.trim();
+  if(!dept||!fiscalYear){Toast.danger('Department and fiscal year are required.');return;}
+  const items=_budgetItems.filter(i=>i.name&&i.name.trim()).map(i=>({name:i.name.trim(),amount:parseFloat(i.amount)||0}));
+  if(!items.length){Toast.danger('Add at least one sub-item.');return;}
+  if(API.on){try{await apiSend('PUT','/budgets',{dept,fiscalYear,items});Modal.close();Toast.success(`Budget saved for ${dept} (${fiscalYear}).`);App.navigate('budgets');}catch(e){Toast.danger(e.message);}return;}
+  Toast.info('Budget editing requires the backend.');
+}
+
+// ── Tenders (Procurement Lead) ───────────────
+function newTenderModal(){
+  const prs=Store.get('requisitions').filter(p=>['Approved','In Sourcing'].includes(p.status));
+  const vendors=Store.get('vendors').filter(v=>v.status==='Active');
+  const def=new Date(Date.now()+5*60000);const pad=n=>String(n).padStart(2,'0');
+  const dtl=`${def.getFullYear()}-${pad(def.getMonth()+1)}-${pad(def.getDate())}T${pad(def.getHours())}:${pad(def.getMinutes())}`;
+  Modal.open('New Tender — Sealed Bid Auction',
+    `<div class="policy-info mb-3"><div class="pi-title">Competitive bidding (Section 9)</div><div class="pi-items">Invited vendors submit sealed bids. At the opening time all amounts are revealed and vendors may lower their bid during a live window; the window extends ${''}whenever the lead changes. Lowest bid wins.</div></div>
+    <div class="form-group"><label>Linked Requisition</label><select class="form-select" id="tn-pr" onchange="_tnPrChange()"><option value="">— None (standalone) —</option>${prs.map(p=>`<option value="${p.id}" data-title="${(p.title||'').replace(/"/g,'&quot;')}">${p.ref} — ${p.title} (${pkr(p.amount)})</option>`).join('')}</select></div>
+    <div class="form-group"><label>Title <span class="required">*</span></label><input class="form-input" id="tn-title" placeholder="e.g. Data Centre Migration — competitive tender"></div>
+    <div class="form-row">
+      <div class="form-group"><label>Bid opening (date & time) <span class="required">*</span></label><input class="form-input" type="datetime-local" id="tn-open" value="${dtl}"></div>
+      <div class="form-group"><label>Window (min)</label><input class="form-input" type="number" id="tn-window" value="30" step="0.5" min="0.1"></div>
+      <div class="form-group"><label>Extension (min)</label><input class="form-input" type="number" id="tn-ext" value="10" step="0.5" min="0.1"></div>
+    </div>
+    <div class="form-hint" style="margin-top:-4px">Tip: for a live demo set the window/extension to e.g. 1 and the opening time a minute from now.</div>
+    <div class="form-group"><label>Invite vendors (Approved Vendor List) <span class="required">*</span></label>
+      <div style="display:flex;flex-direction:column;gap:6px;max-height:160px;overflow:auto;border:1px solid var(--border);border-radius:var(--r-sm);padding:8px">
+      ${vendors.map(v=>`<label class="form-check-label" style="display:flex;align-items:center;gap:8px"><input type="checkbox" class="tn-vendor" value="${v.id}"> ${v.name} <span class="text-muted" style="font-size:12px">(${v.category})</span></label>`).join('')||'<span class="text-muted">No active vendors</span>'}
+      </div></div>`,
+    `<button class="btn btn-outline" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="doCreateTender()">Open Tender</button>`,
+    true
+  );
+}
+function _tnPrChange(){const sel=document.getElementById('tn-pr');const o=sel.options[sel.selectedIndex];const ti=document.getElementById('tn-title');if(o&&o.dataset.title&&ti&&!ti.value)ti.value=o.dataset.title+' — competitive tender';}
+async function doCreateTender(){
+  const prId=(document.getElementById('tn-pr')||{}).value||null;
+  const title=(document.getElementById('tn-title')||{}).value?.trim();
+  const openLocal=(document.getElementById('tn-open')||{}).value;
+  const windowMin=parseFloat((document.getElementById('tn-window')||{}).value||30);
+  const extensionMin=parseFloat((document.getElementById('tn-ext')||{}).value||10);
+  const vendorIds=[...document.querySelectorAll('.tn-vendor:checked')].map(c=>c.value);
+  if(!title){Toast.danger('Title is required.');return;}
+  if(!openLocal){Toast.danger('Bid opening time is required.');return;}
+  if(!vendorIds.length){Toast.danger('Invite at least one vendor.');return;}
+  const openAt=new Date(openLocal).toISOString();
+  if(API.on){try{await apiSend('POST','/tenders',{prId,title,openAt,windowMin,extensionMin,vendorIds});Modal.close();Toast.success('Tender opened for sealed bids.');App.navigate('tenders');}catch(e){Toast.danger(e.message);}return;}
+  Toast.info('Tendering requires the backend.');
+}
+async function doAwardTender(tid){
+  if(API.on){try{await apiSend('POST',`/tenders/${tid}/award`,{});Toast.success('Tender awarded to the lowest bidder.');App.navigate('tender-detail',{id:tid});}catch(e){Toast.danger(e.message);}return;}
+}
+
+// ── Bids (vendor) ────────────────────────────
+function submitBidModal(tid){
+  const t=Store.get('tenders').find(x=>x.id===tid);if(!t)return;
+  const live=t.status==='Live';
+  const cur=t.myBid?t.myBid.amount:null;
+  Modal.open(live?'Revise Your Bid':'Submit Sealed Bid',
+    `<div class="mb-3"><div style="font-weight:700">${t.ref} — ${t.title}</div></div>
+    ${live?`<div class="policy-info mb-3"><div class="pi-items">This is a <strong>live reverse auction</strong>. Your new bid must be <strong>lower</strong> than your current bid${cur?` (${pkr(cur)})`:''}. Lowering to the lowest amount puts you at rank #1.</div></div>`:`<div class="policy-info mb-3"><div class="pi-items">Your sealed bid stays hidden until the opening time. You can update it any time before then.</div></div>`}
+    ${cur?`<div class="detail-row"><span class="detail-key">Your current bid</span><span class="detail-val fw-bold">${pkr(cur)}</span></div>`:''}
+    <div class="form-group mt-2"><label>${live?'New (lower) bid amount':'Sealed bid amount'} (PKR) <span class="required">*</span></label><input class="form-input" type="number" id="bid-amount" placeholder="0" value="${cur&&!live?cur:''}"></div>`,
+    `<button class="btn btn-outline" onclick="Modal.close()">Cancel</button><button class="btn btn-primary" onclick="doSubmitBid('${tid}')">${live?'Submit lower bid':'Submit sealed bid'}</button>`
+  );
+}
+async function doSubmitBid(tid){
+  const amount=parseFloat((document.getElementById('bid-amount')||{}).value||0);
+  if(!amount||amount<=0){Toast.danger('Enter a valid bid amount.');return;}
+  if(API.on){try{await apiSend('POST',`/tenders/${tid}/bid`,{amount});Modal.close();Toast.success('Bid submitted.');App.navigate('vendor-tender-detail',{id:tid});}catch(e){Toast.danger(e.message);}return;}
+  Toast.info('Bidding requires the backend.');
 }
 
 // ── Department Approval Config ───────────────

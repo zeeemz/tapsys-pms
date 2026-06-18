@@ -12,6 +12,7 @@ const USERS = [
   { id: 'u6', name: 'Tariq Khan', email: 'tariq@tapsys.pk', role: 'IT Lead', dept: 'IT', initials: 'TK' },
   { id: 'u7', name: 'Amina Siddiqui', email: 'amina@tapsys.pk', role: 'Audit Committee', dept: 'Board', initials: 'AS' },
   { id: 'u8', name: 'Bilal Javed', email: 'bilal@tapsys.pk', role: 'Sales Lead', dept: 'Sales', initials: 'BJ' },
+  { id: 'u9', name: 'Sara Khan', email: 'sara@tapsys.pk', role: 'Budget Owner', dept: 'HR', initials: 'SK' },
 ];
 
 const dd = (o) => JSON.stringify(o);
@@ -81,11 +82,18 @@ const AUDIT = [
   { ts: '2024-01-08T09:00:00.000Z', userId: 'u7', action: 'VENDOR_BLACKLISTED', entity: 'v6', detail: 'FraudCo Pvt Ltd blacklisted by Audit Committee. Bid manipulation and forged documents.', procId: '' },
 ];
 
+const FY = 'FY2024-25';
 const BUDGETS = [
-  { dept: 'Engineering', code: 'ENG', total: 5000000, spent: 3200000, committed: 2250000 },
-  { dept: 'IT', code: 'IT', total: 25000000, spent: 18000000, committed: 47500000 },
-  { dept: 'Sales', code: 'SALES', total: 12000000, spent: 5750000, committed: 8750000 },
-  { dept: 'Operations', code: 'OPS', total: 3000000, spent: 1200000, committed: 0 },
+  { dept: 'Engineering', fiscalYear: FY, code: 'ENG', spent: 3200000, committed: 2250000, items: [
+    { name: 'Headcount Tooling & Equipment', amount: 2500000 }, { name: 'Workstations & Hardware', amount: 1500000 }, { name: 'Training & Certifications', amount: 1000000 } ] },
+  { dept: 'IT', fiscalYear: FY, code: 'IT', spent: 18000000, committed: 47500000, items: [
+    { name: 'Software & SaaS', amount: 10000000 }, { name: 'Cloud & Infrastructure', amount: 10000000 }, { name: 'Hardware & Devices', amount: 5000000 } ] },
+  { dept: 'Sales', fiscalYear: FY, code: 'SALES', spent: 5750000, committed: 8750000, items: [
+    { name: 'CRM & Sales Tools', amount: 8750000 }, { name: 'Events & Conferences', amount: 2000000 }, { name: 'Marketing Collateral', amount: 1250000 } ] },
+  { dept: 'Operations', fiscalYear: FY, code: 'OPS', spent: 1200000, committed: 0, items: [
+    { name: 'Third-Party Services', amount: 2000000 }, { name: 'Facilities & Maintenance', amount: 1000000 } ] },
+  { dept: 'HR', fiscalYear: FY, code: 'HR', spent: 500000, committed: 0, items: [
+    { name: 'Recruitment & Hiring', amount: 2000000 }, { name: 'HR & Payroll Systems', amount: 1500000 }, { name: 'Training & L&D', amount: 1500000 } ] },
 ];
 
 async function seed(prisma) {
@@ -103,7 +111,10 @@ async function seed(prisma) {
   for (const c of COI) await prisma.coi.create({ data: c });
   for (const e of EXCEPTIONS) await prisma.exception.create({ data: e });
   for (const a of AUDIT) await prisma.auditLog.create({ data: a });
-  for (const b of BUDGETS) await prisma.budget.create({ data: b });
+  for (const b of BUDGETS) {
+    const total = b.items.reduce((s, i) => s + i.amount, 0);
+    await prisma.budget.create({ data: { dept: b.dept, fiscalYear: b.fiscalYear, code: b.code, spent: b.spent, committed: b.committed, total, items: { create: b.items.map(i => ({ name: i.name, amount: i.amount })) } } });
+  }
   await prisma.config.upsert({ where: { id: 'singleton' }, create: { id: 'singleton', deptApprovalConfig: '{}', procIdSeq: 5 }, update: {} });
   console.log(`[seed] Seeded ${USERS.length} users, ${VENDORS.length} vendors, ${REQS.length} requisitions.`);
 }

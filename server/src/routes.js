@@ -2,6 +2,7 @@ const express = require('express');
 const { prisma } = require('./db');
 const { signToken, verifyPassword, authenticate, requireRole, requireStaff, requireVendor } = require('./auth');
 const policy = require('./policy');
+const tenders = require('./tenders');
 const { addAudit, getConfig, nextProcId, publicUser, outVendor, outCoi } = require('./util');
 
 const router = express.Router();
@@ -9,23 +10,29 @@ const wrap = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch((e) => {
   console.error(e); res.status(500).json({ error: e.message || 'Server error' });
 });
 const today = () => new Date().toISOString().split('T')[0];
+const TENDER_INCLUDE = { invites: true, bids: true };
 
 // ─────────────────────────────────────────────────────────────
 // Bootstrap payload (role-scoped)
 // ─────────────────────────────────────────────────────────────
 async function buildBootstrap(principal) {
+  const now = Date.now();
+  const allVendors = await prisma.vendor.findMany();
+  const vendorMap = {}; allVendors.forEach(v => { vendorMap[v.id] = v.name; });
+
   if (principal.type === 'vendor') {
     const vid = principal.id;
-    const [vendor, pos, invoices] = await Promise.all([
+    const [vendor, pos, invoices, tdrs] = await Promise.all([
       prisma.vendor.findUnique({ where: { id: vid } }),
       prisma.purchaseOrder.findMany({ where: { vendorId: vid } }),
       prisma.invoice.findMany({ where: { vendorId: vid } }),
+      prisma.tender.findMany({ where: { invites: { some: { vendorId: vid } } }, include: TENDER_INCLUDE }),
     ]);
-    return { mode: 'vendor', vendor: outVendor(vendor), purchaseOrders: pos, invoices };
+    const tenderViews = tdrs.map(t => tenders.serializeTender(t, principal, now, vendorMap)).filter(Boolean);
+    return { mode: 'vendor', vendor: outVendor(vendor), purchaseOrders: pos, invoices, tenders: tenderViews };
   }
-  const [users, vendors, reqs, pos, quotes, receipts, invoices, coi, exceptions, overrides, audit, budgets, cfg] = await Promise.all([
+  const [users, reqs, pos, quotes, receipts, invoices, coi, exceptions, overrides, audit, budgets, tdrs, cfg] = await Promise.all([
     prisma.user.findMany(),
-    prisma.vendor.findMany(),
     prisma.requisition.findMany({ include: { approvals: true } }),
     prisma.purchaseOrder.findMany(),
     prisma.quote.findMany(),
@@ -35,14 +42,15 @@ async function buildBootstrap(principal) {
     prisma.exception.findMany(),
     prisma.overrideRequest.findMany(),
     prisma.auditLog.findMany(),
-    prisma.budget.findMany(),
+    prisma.budget.findMany({ include: { items: true } }),
+    prisma.tender.findMany({ include: TENDER_INCLUDE }),
     getConfig(),
   ]);
   audit.sort((a, b) => (a.ts < b.ts ? 1 : -1));
   return {
     mode: 'staff',
     users: users.map(publicUser),
-    vendors: vendors.map(outVendor),
+    vendors: allVendors.map(outVendor),
     requisitions: reqs,
     purchaseOrders: pos,
     quotes,
@@ -53,6 +61,7 @@ async function buildBootstrap(principal) {
     overrideRequests: overrides,
     auditLog: audit,
     budgets,
+    tenders: tdrs.map(t => tenders.serializeTender(t, principal, now, vendorMap)),
     deptApprovalConfig: cfg.deptApprovalConfig,
   };
 }
@@ -422,6 +431,112 @@ router.put('/config/dept-approval', authenticate, requireRole('Finance / CFO', '
   all[dept] = config || {};
   await prisma.config.update({ where: { id: 'singleton' }, data: { deptApprovalConfig: JSON.stringify(all) } });
   await addAudit(req.user.id, 'SETTINGS_UPDATED', dept, `Approval chain configured for ${dept} department.`);
+  res.json(await buildBootstrap(req.user));
+}));
+
+// ─────────────────────────────────────────────────────────────
+// Budgets — CFO sets fiscal-year budgets with sub-items
+// ─────────────────────────────────────────────────────────────
+router.put('/budgets', authenticate, requireRole('Finance / CFO'), wrap(async (req, res) => {
+  const b = req.body || {};
+  const dept = String(b.dept || '').trim();
+  const fiscalYear = String(b.fiscalYear || '').trim();
+  if (!dept || !fiscalYear) return res.status(400).json({ error: 'Department and fiscal year are required' });
+  const items = Array.isArray(b.items) ? b.items.filter(i => i && i.name).map(i => ({ name: String(i.name), amount: parseFloat(i.amount || 0) })) : [];
+  const total = items.reduce((s, i) => s + i.amount, 0);
+  const existing = await prisma.budget.findFirst({ where: { dept, fiscalYear } });
+  if (existing) {
+    await prisma.budgetItem.deleteMany({ where: { budgetId: existing.id } });
+    await prisma.budget.update({ where: { id: existing.id }, data: { code: b.code || existing.code, total, items: { create: items } } });
+  } else {
+    await prisma.budget.create({ data: { dept, fiscalYear, code: b.code || dept.slice(0, 4).toUpperCase(), total, spent: 0, committed: 0, items: { create: items } } });
+  }
+  await addAudit(req.user.id, 'BUDGET_UPDATED', `${dept} ${fiscalYear}`, `Budget set for ${dept} (${fiscalYear}): ${items.length} line item(s), total PKR ${total.toLocaleString()}.`);
+  res.json(await buildBootstrap(req.user));
+}));
+
+// ─────────────────────────────────────────────────────────────
+// Tenders — sealed-bid reverse auction
+// ─────────────────────────────────────────────────────────────
+router.post('/tenders', authenticate, requireRole('Procurement Lead'), wrap(async (req, res) => {
+  const b = req.body || {};
+  if (!b.title || !b.openAt) return res.status(400).json({ error: 'Title and bid-opening time are required' });
+  const vendorIds = Array.isArray(b.vendorIds) ? b.vendorIds : [];
+  if (vendorIds.length < 1) return res.status(400).json({ error: 'Invite at least one vendor' });
+  // Validate invited vendors are Active AVL
+  const vs = await prisma.vendor.findMany({ where: { id: { in: vendorIds } } });
+  if (vs.some(v => v.status !== 'Active')) return res.status(400).json({ error: 'All invited vendors must be Active on the AVL' });
+  const pr = b.prId ? await prisma.requisition.findUnique({ where: { id: b.prId } }) : null;
+  const yr = new Date().getFullYear();
+  const count = await prisma.tender.count();
+  const tender = await prisma.tender.create({
+    data: {
+      ref: `TND-${yr}-${String(count + 1).padStart(3, '0')}`, prId: pr ? pr.id : null, procurementId: pr ? pr.procurementId : '',
+      title: b.title, dept: pr ? pr.dept : (b.dept || ''), createdBy: req.user.id, createdAt: new Date().toISOString(),
+      openAt: new Date(b.openAt).toISOString(), windowMin: parseFloat(b.windowMin || 30), extensionMin: parseFloat(b.extensionMin || 10),
+      status: 'Sealed', notes: b.notes || '',
+      invites: { create: vendorIds.map(vid => ({ vendorId: vid })) },
+    },
+  });
+  await addAudit(req.user.id, 'TENDER_OPENED', tender.ref, `Tender ${tender.ref} opened for sealed bids — ${vendorIds.length} vendor(s) invited. Bids open ${new Date(tender.openAt).toLocaleString()}.`, tender.procurementId);
+  res.json(await buildBootstrap(req.user));
+}));
+
+// Submit or revise a bid (invited vendor only). Sealed before open; revise-DOWN only after open.
+router.post('/tenders/:id/bid', authenticate, requireVendor, wrap(async (req, res) => {
+  const amount = parseFloat(req.body.amount || 0);
+  if (!amount || amount <= 0) return res.status(400).json({ error: 'A valid bid amount is required' });
+  const t = await prisma.tender.findUnique({ where: { id: req.params.id }, include: TENDER_INCLUDE });
+  if (!t) return res.status(404).json({ error: 'Tender not found' });
+  const vid = req.user.vendorId;
+  if (!t.invites.some(i => i.vendorId === vid)) return res.status(403).json({ error: 'You are not invited to this tender' });
+  const now = Date.now();
+  const status = tenders.effectiveStatus(t, now);
+  if (status === 'Cancelled') return res.status(400).json({ error: 'This tender has been cancelled' });
+  if (status === 'Closed') return res.status(400).json({ error: 'Bidding has closed for this tender' });
+
+  const existing = t.bids.find(x => x.vendorId === vid);
+  const nowIso = new Date().toISOString();
+
+  if (status === 'Sealed') {
+    // Free to submit/replace a sealed bid before opening.
+    if (existing) await prisma.bid.update({ where: { id: existing.id }, data: { amount, updatedAt: nowIso } });
+    else await prisma.bid.create({ data: { tenderId: t.id, vendorId: vid, amount, revisions: 0, createdAt: nowIso, updatedAt: nowIso } });
+    await addAudit('vendor:' + vid, 'BID_SUBMITTED', t.ref, `Sealed bid submitted for ${t.ref}.`, t.procurementId);
+    return res.json(await buildBootstrap(req.user));
+  }
+
+  // status === 'Live': revise-down only
+  if (existing && amount >= existing.amount) {
+    return res.status(400).json({ error: `New bid must be lower than your current bid (PKR ${existing.amount.toLocaleString()}).` });
+  }
+  const leaderBefore = tenders.rankBids(t.bids)[0];
+  if (existing) await prisma.bid.update({ where: { id: existing.id }, data: { amount, revisions: existing.revisions + 1, updatedAt: nowIso } });
+  else await prisma.bid.create({ data: { tenderId: t.id, vendorId: vid, amount, revisions: 1, createdAt: nowIso, updatedAt: nowIso } });
+
+  // Anti-snipe: if the leader (lowest) changed, extend the window so everyone gets another chance.
+  const fresh = await prisma.tender.findUnique({ where: { id: t.id }, include: TENDER_INCLUDE });
+  const leaderAfter = tenders.rankBids(fresh.bids)[0];
+  let extended = false;
+  if (!leaderBefore || (leaderAfter && leaderAfter.vendorId !== leaderBefore.vendorId)) {
+    const curEnds = tenders.endsAtMs(fresh);
+    const newEnds = Math.max(curEnds, now + (t.extensionMin || 10) * 60000);
+    if (newEnds > curEnds) { await prisma.tender.update({ where: { id: t.id }, data: { revisionEndsAt: new Date(newEnds).toISOString() } }); extended = true; }
+  }
+  await addAudit('vendor:' + vid, 'BID_REVISED', t.ref, `Bid revised down to PKR ${amount.toLocaleString()} for ${t.ref}${extended ? ` — lead changed, window extended ${t.extensionMin}m.` : '.'}`, t.procurementId);
+  res.json(await buildBootstrap(req.user));
+}));
+
+// Award the tender to the lowest bidder (Procurement Lead), once closed.
+router.post('/tenders/:id/award', authenticate, requireRole('Procurement Lead'), wrap(async (req, res) => {
+  const t = await prisma.tender.findUnique({ where: { id: req.params.id }, include: TENDER_INCLUDE });
+  if (!t) return res.status(404).json({ error: 'Tender not found' });
+  if (tenders.effectiveStatus(t, Date.now()) !== 'Closed') return res.status(400).json({ error: 'Tender bidding is still in progress' });
+  const winner = tenders.rankBids(t.bids)[0];
+  if (!winner) return res.status(400).json({ error: 'No bids were submitted' });
+  await prisma.tender.update({ where: { id: t.id }, data: { status: 'Closed', selectedVendorId: winner.vendorId } });
+  const vname = (await prisma.vendor.findUnique({ where: { id: winner.vendorId } }))?.name || 'vendor';
+  await addAudit(req.user.id, 'TENDER_AWARDED', t.ref, `Tender ${t.ref} awarded to ${vname} at PKR ${winner.amount.toLocaleString()} (lowest bid).`, t.procurementId);
   res.json(await buildBootstrap(req.user));
 }));
 

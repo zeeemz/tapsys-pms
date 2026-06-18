@@ -106,27 +106,32 @@ async function buildBootstrap(principal) {
 // ─────────────────────────────────────────────────────────────
 // Public: health + auth
 // ─────────────────────────────────────────────────────────────
-router.get('/health', (req, res) => res.json({ ok: true, service: 'tapsys-pms', time: new Date().toISOString(), aadEnabled: AAD.enabled(), aadDomain: AAD.allowedDomain }));
+router.get('/health', wrap(async (req, res) => {
+  const cfg = await AAD.cfg();
+  res.json({ ok: true, service: 'tapsys-pms', time: new Date().toISOString(), aadEnabled: cfg.enabled, aadDomain: cfg.allowedDomain });
+}));
 
 // ── Entra ID (Azure AD) SSO ──
-router.get('/auth/aad/login', (req, res) => {
-  if (!AAD.enabled()) return res.status(503).send('Microsoft sign-in is not configured.');
+router.get('/auth/aad/login', wrap(async (req, res) => {
+  const cfg = await AAD.cfg();
+  if (!cfg.enabled) return res.status(503).send('Microsoft sign-in is not configured.');
   const state = AAD.randomState(); putState(state);
-  res.redirect(AAD.authorizeUrl(state, AAD.redirectUri(req)));
-});
+  res.redirect(AAD.authorizeUrl(cfg, state, AAD.redirectUriFor(req, cfg)));
+}));
 
 router.get('/auth/aad/callback', wrap(async (req, res) => {
   const fail = (msg) => res.redirect('/#sso_error=' + encodeURIComponent(msg));
-  if (!AAD.enabled()) return fail('Microsoft sign-in is not configured.');
+  const cfg = await AAD.cfg();
+  if (!cfg.enabled) return fail('Microsoft sign-in is not configured.');
   if (req.query.error) return fail(req.query.error_description || req.query.error);
   if (!req.query.code || !takeState(String(req.query.state || ''))) return fail('Sign-in session expired. Please try again.');
   try {
-    const tok = await AAD.exchangeCode(String(req.query.code), AAD.redirectUri(req));
+    const tok = await AAD.exchangeCode(cfg, String(req.query.code), AAD.redirectUriFor(req, cfg));
     const claims = AAD.decodeIdToken(tok.id_token);
-    AAD.validateClaims(claims);
+    AAD.validateClaims(cfg, claims);
     const email = AAD.emailFromClaims(claims);
     if (!email) return fail('No email in your Microsoft profile.');
-    if (!email.endsWith('@' + AAD.allowedDomain)) return fail(`Only @${AAD.allowedDomain} accounts may sign in here.`);
+    if (!email.endsWith('@' + cfg.allowedDomain)) return fail(`Only @${cfg.allowedDomain} accounts may sign in here.`);
     let user = await prisma.user.findUnique({ where: { email } });
     if (!user) {
       // First-time SSO sign-in: provision with NO role (Pending) — no access until an admin assigns one.
@@ -621,9 +626,41 @@ router.post('/tenders/:id/award', authenticate, requireRole('Procurement Lead'),
   res.json(await buildBootstrap(req.user));
 }));
 
-// Admin: assign a role to a user (e.g. approve a pending SSO sign-up). CEO / Founder only.
-const ASSIGNABLE_ROLES = ['Requestor', 'Budget Owner', 'Procurement Lead', 'Finance / CFO', 'CEO / Founder', 'Audit Committee', 'IT Lead', 'Sales Lead', 'Pending'];
-router.post('/users/:id/role', authenticate, requireRole('CEO / Founder'), wrap(async (req, res) => {
+// ─────────────────────────────────────────────────────────────
+// Back office (Super Admin): SSO configuration + user role assignment
+// ─────────────────────────────────────────────────────────────
+// Return SSO config WITHOUT the secret (only whether one is set).
+router.get('/config/sso', authenticate, requireRole('Super Admin'), wrap(async (req, res) => {
+  const cfg = await AAD.cfg();
+  const c = await getConfig();
+  res.json({
+    tenantId: c.raw.aadTenantId || '', clientId: c.raw.aadClientId || '',
+    allowedDomain: c.raw.aadAllowedDomain || 'paysyslabs.com', redirectUri: c.raw.aadRedirectUri || '',
+    secretSet: !!(c.raw.aadClientSecret), enabled: cfg.enabled,
+    envFallback: !!(process.env.AAD_TENANT_ID || process.env.AAD_CLIENT_ID),
+  });
+}));
+
+// Save SSO config to the DB. Secret is only updated when a non-empty value is supplied.
+router.put('/config/sso', authenticate, requireRole('Super Admin'), wrap(async (req, res) => {
+  const b = req.body || {};
+  const data = {
+    aadTenantId: String(b.tenantId || '').trim(),
+    aadClientId: String(b.clientId || '').trim(),
+    aadAllowedDomain: (String(b.allowedDomain || 'paysyslabs.com').trim() || 'paysyslabs.com'),
+    aadRedirectUri: String(b.redirectUri || '').trim(),
+  };
+  if (b.clientSecret && String(b.clientSecret).trim()) data.aadClientSecret = String(b.clientSecret).trim();
+  if (b.clearSecret) data.aadClientSecret = '';
+  await prisma.config.update({ where: { id: 'singleton' }, data });
+  await addAudit(req.user.id, 'SSO_CONFIG_UPDATED', 'Entra ID', `Microsoft SSO configuration updated by ${req.user.name} (domain ${data.aadAllowedDomain}).`);
+  const cfg = await AAD.cfg();
+  res.json({ ok: true, enabled: cfg.enabled });
+}));
+
+// Assign a role to a user (e.g. approve a pending SSO sign-up). Super Admin only.
+const ASSIGNABLE_ROLES = ['Requestor', 'Budget Owner', 'Procurement Lead', 'Finance / CFO', 'CEO / Founder', 'Audit Committee', 'IT Lead', 'Sales Lead', 'Super Admin', 'Pending'];
+router.post('/users/:id/role', authenticate, requireRole('Super Admin'), wrap(async (req, res) => {
   const role = String(req.body.role || '');
   const dept = req.body.dept != null ? String(req.body.dept) : null;
   if (!ASSIGNABLE_ROLES.includes(role)) return res.status(400).json({ error: 'Invalid role' });

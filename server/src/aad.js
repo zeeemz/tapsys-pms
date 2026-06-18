@@ -1,54 +1,60 @@
 // Microsoft Entra ID (Azure AD) OpenID Connect — auth-code flow.
-// Env-gated: inactive until AAD_TENANT_ID / AAD_CLIENT_ID / AAD_CLIENT_SECRET are set.
+// Configuration comes from the DB (set by a Super Admin in the back office),
+// falling back to environment variables. SSO is inactive until tenant+client+secret are present.
 const crypto = require('crypto');
+const { prisma } = require('./db');
 
 const AAD = {
-  get tenant() { return process.env.AAD_TENANT_ID || ''; },
-  get clientId() { return process.env.AAD_CLIENT_ID || ''; },
-  get clientSecret() { return process.env.AAD_CLIENT_SECRET || ''; },
-  get allowedDomain() { return (process.env.AAD_ALLOWED_DOMAIN || 'paysyslabs.com').toLowerCase(); },
-  enabled() { return !!(this.tenant && this.clientId && this.clientSecret); },
+  // Effective configuration: DB value first, then env fallback.
+  async cfg() {
+    let c = null;
+    try { c = await prisma.config.findUnique({ where: { id: 'singleton' } }); } catch (e) {}
+    const pick = (db, env) => (db && db.length ? db : (process.env[env] || ''));
+    const tenant = pick(c && c.aadTenantId, 'AAD_TENANT_ID');
+    const clientId = pick(c && c.aadClientId, 'AAD_CLIENT_ID');
+    const clientSecret = pick(c && c.aadClientSecret, 'AAD_CLIENT_SECRET');
+    const allowedDomain = (pick(c && c.aadAllowedDomain, 'AAD_ALLOWED_DOMAIN') || 'paysyslabs.com').toLowerCase();
+    const redirectUri = pick(c && c.aadRedirectUri, 'AAD_REDIRECT_URI');
+    return { tenant, clientId, clientSecret, allowedDomain, redirectUri, enabled: !!(tenant && clientId && clientSecret) };
+  },
 
-  // Prefer an explicit env (avoids proxy/scheme guesswork on Azure); else derive from the request.
-  redirectUri(req) {
-    if (process.env.AAD_REDIRECT_URI) return process.env.AAD_REDIRECT_URI;
+  redirectUriFor(req, cfg) {
+    if (cfg.redirectUri) return cfg.redirectUri;
     const proto = (req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0];
     return `${proto}://${req.get('host')}/api/auth/aad/callback`;
   },
 
-  authorizeUrl(state, redirectUri) {
+  authorizeUrl(cfg, state, redirectUri) {
     const p = new URLSearchParams({
-      client_id: this.clientId, response_type: 'code', redirect_uri: redirectUri,
+      client_id: cfg.clientId, response_type: 'code', redirect_uri: redirectUri,
       response_mode: 'query', scope: 'openid profile email', state,
     });
-    return `https://login.microsoftonline.com/${this.tenant}/oauth2/v2.0/authorize?${p.toString()}`;
+    return `https://login.microsoftonline.com/${cfg.tenant}/oauth2/v2.0/authorize?${p.toString()}`;
   },
 
-  async exchangeCode(code, redirectUri) {
+  async exchangeCode(cfg, code, redirectUri) {
     const body = new URLSearchParams({
-      client_id: this.clientId, client_secret: this.clientSecret, code,
+      client_id: cfg.clientId, client_secret: cfg.clientSecret, code,
       redirect_uri: redirectUri, grant_type: 'authorization_code', scope: 'openid profile email',
     });
-    const res = await fetch(`https://login.microsoftonline.com/${this.tenant}/oauth2/v2.0/token`, {
+    const res = await fetch(`https://login.microsoftonline.com/${cfg.tenant}/oauth2/v2.0/token`, {
       method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body,
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error_description || data.error || 'Token exchange failed');
-    return data; // { id_token, access_token, ... }
+    return data;
   },
 
-  // The id_token arrives over a server-to-server TLS call authenticated by the client secret,
-  // so we read its claims directly. (Issuer/audience/expiry are still validated below.)
   decodeIdToken(idToken) {
     const parts = String(idToken || '').split('.');
     if (parts.length < 2) throw new Error('Malformed id_token');
     return JSON.parse(Buffer.from(parts[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'));
   },
 
-  validateClaims(claims) {
+  validateClaims(cfg, claims) {
     if (!claims) throw new Error('No claims');
-    if (claims.aud !== this.clientId) throw new Error('Token audience mismatch');
-    if (claims.tid && this.tenant && this.tenant !== 'common' && claims.tid !== this.tenant) throw new Error('Token tenant mismatch');
+    if (claims.aud !== cfg.clientId) throw new Error('Token audience mismatch');
+    if (claims.tid && cfg.tenant && cfg.tenant !== 'common' && claims.tid !== cfg.tenant) throw new Error('Token tenant mismatch');
     if (claims.exp && Date.now() / 1000 > claims.exp) throw new Error('Token expired');
     return true;
   },
@@ -66,7 +72,7 @@ function putState(s) { _states.set(s, Date.now()); }
 function takeState(s) {
   const t = _states.get(s); if (!t) return false;
   _states.delete(s);
-  for (const [k, v] of _states) if (Date.now() - v > 600000) _states.delete(k); // GC > 10 min
+  for (const [k, v] of _states) if (Date.now() - v > 600000) _states.delete(k);
   return Date.now() - t < 600000;
 }
 

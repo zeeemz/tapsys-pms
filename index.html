@@ -867,7 +867,9 @@ const App = {
       ['P','Rashid Mehmood','PrintMasters Office Supplies','orders@printmasters.pk'],
     ];
     const row=(av,avbg,avc,name,meta,email)=>`<div class="login-demo-row" onclick="App.demoLogin('${email.toLowerCase()}')"><div class="login-demo-av" style="${avbg?`background:${avbg};color:${avc}`:''}">${av}</div><div style="min-width:0"><div class="ld-name">${name}</div><div class="ld-meta">${meta}</div></div><span class="ld-go">Sign in →</span></div>`;
-    el.innerHTML=`<div class="login-demo-grp">Internal staff</div>`+
+    el.innerHTML=`<div class="login-demo-grp">Super Admin (local · not via SSO)</div>`+
+      row('SA','var(--sidebar-bg)','#fff','System Administrator','Super Admin · superadmin@tapsys.pk','superadmin@tapsys.pk')+
+      `<div class="login-demo-grp">Internal staff</div>`+
       staff.map(s=>row(s[0],'','',s[1],s[2]+' · '+s[3],s[3])).join('')+
       `<div class="login-demo-grp">Vendor portal</div>`+
       vendors.map(v=>row(v[0],'var(--warning-bg)','var(--warning-t)',v[1],v[2]+' · '+v[3],v[3])).join('');
@@ -879,6 +881,7 @@ const App = {
     this._renderContent();
     this._renderBreadcrumb();
     this._renderNotifBadge();
+    if(this.view==='admin')this._populateSso();
     this._maybePoll();
   },
   _clearPoll(){ if(this._pollTimer){clearInterval(this._pollTimer);this._pollTimer=null;} },
@@ -911,6 +914,16 @@ const App = {
     const pending=this._getPendingActions();const dot=document.getElementById('notif-dot');if(dot)dot.classList.toggle('hidden',pending.length===0);
   },
   _vendorOpenTenders(){ if(!this.currentVendor)return 0; return Store.get('tenders').filter(t=>t.status==='Sealed'||t.status==='Live').length; },
+  async _populateSso(){
+    if(!API.on)return;
+    try{
+      const c=await API.call('GET','/config/sso');
+      const set=(id,v)=>{const el=document.getElementById(id);if(el)el.value=v||'';};
+      set('sso-tenant',c.tenantId);set('sso-client',c.clientId);set('sso-domain',c.allowedDomain||'paysyslabs.com');set('sso-redirect',c.redirectUri);
+      const st=document.getElementById('sso-status');if(st){st.textContent=c.enabled?'Enabled':'Not configured';st.className='badge badge-'+(c.enabled?'success':'gray');}
+      const ss=document.getElementById('sso-secret-state');if(ss)ss.textContent=c.secretSet?'A client secret is stored (leave blank to keep it).':(c.envFallback?'Using environment-variable fallback.':'No client secret stored yet.');
+    }catch(e){}
+  },
   _getPendingActions(){
     if(this.currentVendor){
       // Vendor's to-do: received POs not yet invoiced
@@ -946,9 +959,10 @@ const App = {
       {id:'exceptions',label:'Exceptions & Waivers',icon:'alert',section:null},
       {id:'reports',label:'Reports & Analytics',icon:'bar_chart',section:'ANALYTICS'},
       {id:'audit-trail',label:'Audit Trail',icon:'search_icon',section:null},
-      {id:'settings',label:'Settings',icon:'settings',section:'ADMIN'},
+      {id:'admin',label:'Administration',icon:'shield',section:'ADMIN',superAdmin:true},
+      {id:'settings',label:'Settings',icon:'settings',section:this.currentUser?.role==='Super Admin'?null:'ADMIN'},
     ];
-    nav.innerHTML=items.map(item=>{
+    nav.innerHTML=items.filter(it=>!it.superAdmin||this.currentUser?.role==='Super Admin').map(item=>{
       const active=this.view===item.id?'active':'';
       const sec=item.section?`<div class="sb-label">${item.section}</div>`:'';
       const badge=item.badge?`<span class="sb-badge">${item.badge}</span>`:'';
@@ -975,8 +989,8 @@ const App = {
   },
   _renderBreadcrumb(){
     const el=document.getElementById('breadcrumb');if(!el)return;
-    const labels={dashboard:'Dashboard',requisitions:'Purchase Requisitions','pr-detail':'PR Detail','pr-new':'New Requisition',approvals:'Approval Queue','purchase-orders':'Purchase Orders',vendors:'Vendor Registry','vendor-detail':'Vendor Detail',quotes:'Quotes & Sourcing',tenders:'Tenders & Bidding','tender-detail':'Tender',budgets:'Budgets',receipts:'Receipt Confirmation',invoices:'Invoice Matching',compliance:'COI & Compliance',exceptions:'Exceptions & Waivers',reports:'Reports & Analytics','audit-trail':'Audit Trail',settings:'Settings','vendor-dashboard':'Dashboard','vendor-pos':'My Purchase Orders','vendor-tenders':'Tenders & Bids','vendor-tender-detail':'Tender','vendor-invoice-new':'Submit Invoice','vendor-invoices':'My Invoices & Payments','vendor-profile':'Company Profile'};
-    const sections={dashboard:null,requisitions:'Procurement',approvals:'Procurement','purchase-orders':'Procurement',vendors:'Vendors','vendor-detail':'Vendors',quotes:'Sourcing',tenders:'Sourcing','tender-detail':'Sourcing',budgets:'Finance',receipts:'Finance',invoices:'Finance',compliance:'Compliance',exceptions:'Compliance',reports:'Analytics','audit-trail':'Analytics',settings:'Admin','vendor-pos':'Vendor Portal','vendor-tenders':'Vendor Portal','vendor-tender-detail':'Vendor Portal','vendor-invoice-new':'Vendor Portal','vendor-invoices':'Vendor Portal','vendor-profile':'Vendor Portal'};
+    const labels={dashboard:'Dashboard',requisitions:'Purchase Requisitions','pr-detail':'PR Detail','pr-new':'New Requisition',approvals:'Approval Queue','purchase-orders':'Purchase Orders',vendors:'Vendor Registry','vendor-detail':'Vendor Detail',quotes:'Quotes & Sourcing',tenders:'Tenders & Bidding','tender-detail':'Tender',budgets:'Budgets',receipts:'Receipt Confirmation',invoices:'Invoice Matching',compliance:'COI & Compliance',exceptions:'Exceptions & Waivers',reports:'Reports & Analytics','audit-trail':'Audit Trail',admin:'Administration',settings:'Settings','vendor-dashboard':'Dashboard','vendor-pos':'My Purchase Orders','vendor-tenders':'Tenders & Bids','vendor-tender-detail':'Tender','vendor-invoice-new':'Submit Invoice','vendor-invoices':'My Invoices & Payments','vendor-profile':'Company Profile'};
+    const sections={dashboard:null,requisitions:'Procurement',approvals:'Procurement','purchase-orders':'Procurement',vendors:'Vendors','vendor-detail':'Vendors',quotes:'Sourcing',tenders:'Sourcing','tender-detail':'Sourcing',budgets:'Finance',receipts:'Finance',invoices:'Finance',compliance:'Compliance',exceptions:'Compliance',reports:'Analytics','audit-trail':'Analytics',admin:'Admin',settings:'Admin','vendor-pos':'Vendor Portal','vendor-tenders':'Vendor Portal','vendor-tender-detail':'Vendor Portal','vendor-invoice-new':'Vendor Portal','vendor-invoices':'Vendor Portal','vendor-profile':'Vendor Portal'};
     const section=sections[this.view];
     const label=labels[this.view]||this.view;
     el.innerHTML=section?`<span>${section}</span><span class="breadcrumb-sep">›</span><strong>${label}</strong>`:`<strong>${label}</strong>`;
@@ -998,7 +1012,7 @@ const App = {
       approvals:Views.approvals,'purchase-orders':Views.purchaseOrders,vendors:Views.vendors,'vendor-detail':Views.vendorDetail,
       quotes:Views.quotes,tenders:Views.tenders,'tender-detail':Views.tenderDetail,budgets:Views.budgets,
       receipts:Views.receipts,invoices:Views.invoices,compliance:Views.compliance,
-      exceptions:Views.exceptions,reports:Views.reports,'audit-trail':Views.auditTrail,settings:Views.settings,
+      exceptions:Views.exceptions,reports:Views.reports,'audit-trail':Views.auditTrail,settings:Views.settings,admin:Views.admin,
     };
     const fn=renders[this.view];
     el.innerHTML=fn?fn.call(Views,this.params):`<div class="empty-state"><div class="empty-title">View not found</div></div>`;
@@ -2083,10 +2097,10 @@ settings(){
     </div>
   </div>
   <div class="card" style="grid-column:1/-1">
-    <div class="card-header"><div><div class="card-title">User Management</div><div class="card-sub">${Store.get('users').length} users · ${isAdmin?'assign roles to staff and approve pending SSO sign-ins':'roles managed by CEO / Founder'}</div></div></div>
+    <div class="card-header"><div><div class="card-title">System Users</div><div class="card-sub">${Store.get('users').length} users · role assignment is managed by the Super Admin in Administration</div></div></div>
     <div class="table-wrap">
-      <table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Department</th>${isAdmin?'<th>Action</th>':''}</tr></thead>
-      <tbody>${Store.get('users').map(u=>{const pend=!u.role||u.role==='Pending'||u.role==='No Access';return `<tr${pend?' style="background:var(--warning-bg)"':''}><td><div style="display:flex;align-items:center;gap:6px">${avatar(u,22)}<span>${u.name}</span></div></td><td class="text-muted" style="font-size:12px">${u.email}</td><td>${pend?'<span class="badge badge-warning">⏳ Pending</span>':`<span class="badge badge-info">${u.role}</span>`}</td><td class="text-muted">${u.dept}</td>${isAdmin?`<td><button class="btn btn-${pend?'primary':'ghost'} btn-sm" onclick="assignRoleModal('${u.id}')">${pend?'Assign role':'Change'}</button></td>`:''}</tr>`;}).join('')}</tbody></table>
+      <table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Department</th></tr></thead>
+      <tbody>${Store.get('users').map(u=>{const pend=!u.role||u.role==='Pending'||u.role==='No Access';return `<tr${pend?' style="background:var(--warning-bg)"':''}><td><div style="display:flex;align-items:center;gap:6px">${avatar(u,22)}<span>${u.name}</span></div></td><td class="text-muted" style="font-size:12px">${u.email}</td><td>${pend?'<span class="badge badge-warning">⏳ Pending</span>':`<span class="badge badge-info">${u.role}</span>`}</td><td class="text-muted">${u.dept}</td></tr>`;}).join('')}</tbody></table>
     </div>
   </div>
 </div>
@@ -2322,6 +2336,34 @@ vendorTenderDetail({id}={}){
     ${(t.bids||[]).map(b=>`<tr style="${b.isMe?'background:var(--primary-bg)':''}"><td>#${b.rank}</td><td>${b.label}</td><td class="fw-bold">${pkr(b.amount)}</td></tr>`).join('')}</tbody></table></div></div>`;
   }
   return head+meta+body;
+},
+
+// ═══════════════ ADMINISTRATION (Super Admin) ═══════════════
+admin(){
+  const origin=window.location.origin;
+  return `
+<div class="page-header"><div><div class="page-title">Administration</div><div class="page-sub">Super Admin — single sign-on configuration &amp; user access</div></div></div>
+<div class="card" style="margin-bottom:16px">
+  <div class="card-header"><div><div class="card-title">Microsoft Entra ID (Single Sign-On)</div><div class="card-sub">Configure Azure AD sign-in for your staff — applied immediately, no redeploy</div></div><span id="sso-status" class="badge badge-gray">…</span></div>
+  <div class="card-body">
+    <div class="policy-info mb-3"><div class="pi-title">${I('shield')} Register this Redirect URI on your Entra app registration</div><div class="pi-items"><code>${origin}/api/auth/aad/callback</code> &nbsp;·&nbsp; API permissions (delegated): <code>openid</code>, <code>profile</code>, <code>email</code></div></div>
+    <div class="form-row">
+      <div class="form-group"><label>Directory (Tenant) ID</label><input class="form-input" id="sso-tenant" placeholder="00000000-0000-0000-0000-000000000000"></div>
+      <div class="form-group"><label>Application (Client) ID</label><input class="form-input" id="sso-client" placeholder="11111111-1111-1111-1111-111111111111"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Client secret</label><input class="form-input" id="sso-secret" type="password" placeholder="•••••• (leave blank to keep current)" autocomplete="new-password"></div>
+      <div class="form-group"><label>Allowed email domain</label><input class="form-input" id="sso-domain" placeholder="paysyslabs.com"></div>
+    </div>
+    <div class="form-group"><label>Redirect URI override (optional)</label><input class="form-input" id="sso-redirect" placeholder="${origin}/api/auth/aad/callback"></div>
+    <div style="display:flex;gap:10px;align-items:center;margin-top:8px"><button class="btn btn-primary" onclick="doSaveSso()">Save SSO Configuration</button><span id="sso-secret-state" class="text-muted" style="font-size:12px"></span></div>
+  </div>
+</div>
+<div class="card">
+  <div class="card-header"><div><div class="card-title">User Management</div><div class="card-sub">Assign roles &amp; approve pending SSO sign-ins. ${Store.get('users').filter(u=>!u.role||u.role==='Pending').length} pending.</div></div></div>
+  <div class="table-wrap"><table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Department</th><th>Action</th></tr></thead>
+  <tbody>${Store.get('users').map(u=>{const pend=!u.role||u.role==='Pending'||u.role==='No Access';return `<tr${pend?' style="background:var(--warning-bg)"':''}><td><div style="display:flex;align-items:center;gap:6px">${avatar(u,22)}<span>${u.name}</span></div></td><td class="text-muted" style="font-size:12px">${u.email}</td><td>${pend?'<span class="badge badge-warning">⏳ Pending</span>':`<span class="badge badge-info">${u.role}</span>`}</td><td class="text-muted">${u.dept}</td><td><button class="btn btn-${pend?'primary':'ghost'} btn-sm" onclick="assignRoleModal('${u.id}')">${pend?'Assign role':'Change'}</button></td></tr>`;}).join('')}</tbody></table></div>
+</div>`;
 },
 
 };// end Views
@@ -3191,6 +3233,24 @@ async function doSubmitBid(tid){
   if(!amount||amount<=0){Toast.danger('Enter a valid bid amount.');return;}
   if(API.on){try{await apiSend('POST',`/tenders/${tid}/bid`,{amount});Modal.close();Toast.success('Bid submitted.');App.navigate('vendor-tender-detail',{id:tid});}catch(e){Toast.danger(e.message);}return;}
   Toast.info('Bidding requires the backend.');
+}
+
+// ── SSO configuration (Super Admin) ──────────
+async function doSaveSso(){
+  const v=id=>(document.getElementById(id)||{}).value?.trim()||'';
+  const body={tenantId:v('sso-tenant'),clientId:v('sso-client'),allowedDomain:v('sso-domain')||'paysyslabs.com',redirectUri:v('sso-redirect')};
+  const secret=v('sso-secret'); if(secret)body.clientSecret=secret;
+  if(API.on){
+    try{
+      const r=await API.call('PUT','/config/sso',body);
+      await API.detect();
+      Toast.success('SSO configuration saved'+(r.enabled?' — Microsoft sign-in is now enabled.':'.'));
+      App._populateSso();
+      const s=document.getElementById('sso-secret');if(s)s.value='';
+    }catch(e){Toast.danger(e.message);}
+    return;
+  }
+  Toast.info('SSO configuration requires the backend.');
 }
 
 // ── User role assignment (admin) ─────────────

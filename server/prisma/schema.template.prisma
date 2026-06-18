@@ -263,4 +263,9 @@ model Config {
   id                  String @id @default("singleton")
   deptApprovalConfig  String @default("{}")
   procIdSeq           Int    @default(0)
+  aadTenantId         String @default("")
+  aadClientId         String @default("")
+  aadClientSecret     String @default("")
+  aadAllowedDomain    String @default("paysyslabs.com")
+  aadRedirectUri      String @default("")
 }

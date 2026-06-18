@@ -4,6 +4,7 @@ const bcrypt = require('bcryptjs');
 const DEMO_PASSWORD = process.env.DEMO_PASSWORD || 'tapsys';
 
 const USERS = [
+  { id: 'u0', name: 'System Administrator', email: 'superadmin@tapsys.pk', role: 'Super Admin', dept: 'Administration', initials: 'SA' },
   { id: 'u1', name: 'Hamid Malik', email: 'hamid@tapsys.pk', role: 'Budget Owner', dept: 'Engineering', initials: 'HM' },
   { id: 'u2', name: 'Fatima Zahra', email: 'fatima@tapsys.pk', role: 'Requestor', dept: 'Engineering', initials: 'FZ' },
   { id: 'u3', name: 'Ali Hassan', email: 'ali@tapsys.pk', role: 'Procurement Lead', dept: 'Operations', initials: 'AH' },

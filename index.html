@@ -1287,6 +1287,26 @@ prDetail({id}={}){
         <div class="detail-row"><span class="detail-key">Delivery</span><span class="detail-val">${date(po.deliveryDate)}</span></div>
       </div>
     </div>`:''}
+
+    ${(()=>{
+      // Build a complete, procurement-scoped timeline from authoritative sources:
+      // submission + approval chain (always on the PR) + linked PO/quote/invoice/payment audit events.
+      const events=[];
+      const reqU=Store.findUser(pr.requestor);
+      events.push({ts:(pr.createdAt||'2024-01-01')+'T00:00:00',who:reqU?reqU.name:'—',action:pr.status==='Draft'?'PR_DRAFT':'PR_SUBMITTED',detail:'Requisition '+(pr.status==='Draft'?'saved as draft':'submitted for approval')+'.'});
+      (pr.approvals||[]).forEach(a=>{const u=Store.findUser(a.userId);events.push({ts:(a.date||'')+'T00:00:01',who:u?u.name:'—',action:a.action==='APPROVED'?'PR_APPROVED':'PR_REJECTED',detail:(a.action==='APPROVED'?'Approved':'Rejected')+' by '+a.role+(a.comment?' — "'+a.comment+'"':'')});});
+      Store.get('auditLog')
+        .filter(l=>((l.procId&&pr.procurementId&&l.procId===pr.procurementId)||(po&&l.entity===po.ref))&&!['PR_SUBMITTED','PR_DRAFT','PR_APPROVED','PR_REJECTED'].includes(l.action))
+        .forEach(l=>{const u=auditActor(l.userId);events.push({ts:l.ts,who:u?u.name:'System',action:l.action,detail:l.detail});});
+      events.sort((a,b)=>(a.ts<b.ts?-1:1));
+      const col={'PR_SUBMITTED':'info','PR_DRAFT':'gray','PR_APPROVED':'success','PR_REJECTED':'danger','PR_CANCELLED':'gray','PO_ISSUED':'cyan','RECEIPT_CONFIRMED':'success','INVOICE_MATCHED':'success','INVOICE_RECEIVED':'info','MATCH_DISCREPANCY':'danger','PAYMENT_RELEASED':'success','QUOTE_ADDED':'info','WAIVER_REQUESTED':'warning'};
+      return `<div class="card" style="margin-top:16px">
+        <div class="card-header"><div><div class="card-title">Procurement Activity</div><div class="card-sub">Full history for this procurement only — ${pr.procurementId||pr.ref}</div></div>
+        <button class="btn btn-ghost btn-sm" onclick="App.navigate('audit-trail',{q:'${pr.procurementId||pr.ref}'})">Open in full log →</button></div>
+        ${events.length?`<div class="table-wrap"><table><thead><tr><th>When</th><th>Who</th><th>Action</th><th>Detail</th></tr></thead>
+        <tbody>${events.map(e=>`<tr><td class="no-wrap text-muted" style="font-size:12px">${date(e.ts)}</td><td style="font-size:13px">${e.who}</td><td><span class="badge badge-${col[e.action]||'gray'}">${e.action.replace(/_/g,' ')}</span></td><td style="font-size:13px;color:var(--muted)">${e.detail}</td></tr>`).join('')}</tbody></table></div>`:`<div class="card-body"><div class="empty-state" style="padding:20px"><div class="empty-title">No activity recorded for this procurement yet</div></div></div>`}
+      </div>`;
+    })()}
   </div>
 
   <div>
@@ -1316,7 +1336,7 @@ prDetail({id}={}){
         ${pr.status==='Approved'&&App.currentUser?.role==='Procurement Lead'?`<button class="btn btn-primary" onclick="issuePOModal('${pr.id}')">${I('file_text')} Issue Purchase Order</button>`:''}
         ${pr.status==='In Sourcing'&&App.currentUser?.role==='Procurement Lead'?`<button class="btn btn-primary" onclick="issuePOModal('${pr.id}')">${I('file_text')} Issue Purchase Order</button>`:''}
         ${!['Paid','Cancelled','Rejected'].includes(pr.status)?`<button class="btn btn-outline" onclick="cancelPRModal('${pr.id}')">Cancel Request</button>`:''}
-        <button class="btn btn-ghost btn-sm" onclick="App.navigate('audit-trail')">View Audit Log</button>
+        <button class="btn btn-ghost btn-sm" onclick="App.navigate('audit-trail',{q:'${pr.procurementId||pr.ref}'})">View full system log →</button>
       </div>
     </div>
   </div>
@@ -1877,19 +1897,23 @@ reports(){
 },
 
 // ─── AUDIT TRAIL ─────────────────────────────
-auditTrail(){
-  const log=Store.get('auditLog');
+auditTrail(params){
+  const scope=(params&&params.q)?String(params.q):'';
+  const allLog=Store.get('auditLog');
   const actionColors={'PR_SUBMITTED':'info','PR_APPROVED':'success','PR_REJECTED':'danger','PO_ISSUED':'cyan','RECEIPT_CONFIRMED':'success','INVOICE_MATCHED':'success','MATCH_DISCREPANCY':'danger','PAYMENT_RELEASED':'success','VENDOR_BLACKLISTED':'danger','VENDOR_SUSPENDED':'warning','COI_DECLARED':'warning','WAIVER_APPROVED':'success','SECURITY_REVIEW':'info'};
+  const sl=scope.toLowerCase();
+  const log=scope?allLog.filter(l=>(l.procId||'').toLowerCase().includes(sl)||(l.entity||'').toLowerCase().includes(sl)||(l.detail||'').toLowerCase().includes(sl)):allLog;
   return `
 <div class="page-header">
-  <div><div class="page-title">Audit Trail</div><div class="page-sub">Complete, tamper-evident log of all procurement actions — Section 18</div></div>
+  <div><div class="page-title">Audit Trail</div><div class="page-sub">${scope?`Filtered to procurement <strong>${scope}</strong>`:'Complete, tamper-evident log of all procurement actions — Section 18'}</div></div>
   <div class="page-actions"><button class="btn btn-outline" onclick="exportAuditLog()">Export CSV</button></div>
 </div>
+${scope?`<div class="policy-info" style="margin-bottom:12px;display:flex;align-items:center;justify-content:space-between"><div class="pi-items">Showing only activity for <strong>${scope}</strong> (${log.length} event${log.length!==1?'s':''}).</div><button class="btn btn-ghost btn-sm" onclick="App.navigate('audit-trail')">View entire system log →</button></div>`:''}
 <div class="search-bar">
-  <div class="search-input-wrap">${I('search_icon')}<input class="search-input" placeholder="Search audit log…" oninput="filterAuditLog(this.value)"></div>
+  <div class="search-input-wrap">${I('search_icon')}<input class="search-input" placeholder="Search audit log…" value="${scope}" oninput="filterAuditLog(this.value)"></div>
   <select class="form-select" style="width:200px" id="audit-action-filter" onchange="filterAuditLog(document.querySelector('.search-input').value)">
     <option value="">All Actions</option>
-    ${[...new Set(log.map(l=>l.action))].map(a=>`<option>${a}</option>`).join('')}
+    ${[...new Set(allLog.map(l=>l.action))].map(a=>`<option>${a}</option>`).join('')}
   </select>
 </div>
 <div class="card">
